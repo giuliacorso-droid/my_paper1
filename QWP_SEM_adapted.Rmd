@@ -1,0 +1,749 @@
+---
+title: "QWP Survey — SEM Adapted for Participation Constructs Data"
+subtitle: "Expectation Gap Theory & Ceiling Effects | HEPAF H5 (simplified)"
+author: "Giulia Corso — Ca' Foscari University of Venice / CMCC Foundation"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width  = 10,
+  fig.height = 6,
+  dpi     = 150
+)
+```
+
+---
+
+# Overview
+
+This notebook adapts `QWP_SEM_Analysis_v2.Rmd` to the **aggregated Participation
+Constructs dataset** (`Participation_Constructs.xlsx`, n = 157 after cleaning).
+Because the full Qinghe survey constructs (EMQ, EHB, ECO, MGT) are not available
+in this dataset, the HEPAF model is simplified to the PL → PST direct path and
+its component analysis.
+
+**Hypotheses tested:**
+
+| H | Statement | Test |
+|---|-----------|------|
+| H5 (simplified) | Participation Level (PL) → Project Satisfaction (PST) | WLSMV path analysis |
+| EGT | Expectation Gap: higher PL → lower PST? | Directional tests |
+| CEL | Ceiling effect on PST inflating positive association? | Tobit comparison |
+| JT  | Monotone positive trend PL(0) ≤ PL(1) ≤ PL(2)? | Jonckheere-Terpstra |
+
+**Data variables available:**
+
+- `q22_bin` — Pre-project information access binary (0/1)
+- `info_score` — Info Provision channel score (0–1)
+- `consult_score` — Consultation Procedure channel score (0–1)
+- `q24` — Participation Level ordinal (0=none, 1=info-only, 2=consultation)
+- `satisfaction` — Q25 project satisfaction (1–5 Likert)
+
+**Estimator:** WLSMV for ordinal data; polr (MASS) for ordinal logistic regression.
+
+---
+
+# Packages
+
+```{r packages}
+library(readxl)      # Excel import
+library(dplyr)       # Data wrangling
+library(tidyr)       # Pivot helpers
+library(lavaan)      # SEM / path analysis (WLSMV)
+library(semPlot)     # Path diagram
+library(MASS)        # polr — ordinal logistic regression
+library(ggplot2)     # Plots
+library(corrplot)    # Correlation heatmap
+library(psych)       # Descriptive statistics
+library(knitr)       # Table formatting
+library(broom)       # Tidy model output
+library(purrr)       # map helpers
+
+# Table helper — consistent with original QWP_SEM_Analysis_v2.Rmd style
+qtable <- function(df, caption = "", digits = 3) {
+  knitr::kable(df, caption = caption, digits = digits, align = "l")
+}
+```
+
+---
+
+# Data Loading and Cleaning
+
+```{r load-data}
+path_xl <- "4372d09e-Participation_Constructs.xlsx"
+
+# The file has a multi-row header; row 1 is the true header, row 2 is a
+# sub-header for channel names. We read with col_names=TRUE (row 1) and
+# skip row 2 manually.
+df_raw <- read_excel(path_xl, col_names = TRUE)
+
+cat("Rows loaded:", nrow(df_raw), "\n")
+cat("Columns:    ", ncol(df_raw), "\n")
+print(names(df_raw))
+```
+
+```{r clean-data}
+# Identify columns by position (header names contain newlines from Excel)
+# Col order: ID, Q22_raw, Q22_bin, [6 info channels], [8 consult channels],
+#            Q23_answered, info_score, consult_score, Q24, Q25, flag, notes
+
+df <- df_raw %>%
+  transmute(
+    id           = .[[1]],
+    q22_raw      = .[[2]],
+    q22_bin      = as.numeric(.[[3]]),
+    info_score   = as.numeric(.[[19]]),
+    consult_score= as.numeric(.[[20]]),
+    q24          = as.numeric(.[[21]]),
+    satisfaction = as.numeric(.[[22]]),
+    flag         = as.numeric(.[[23]])
+  ) %>%
+  # Remove the sub-header row (row 1 in df_raw = column-label row in Excel)
+  filter(!is.na(id), id != "ID") %>%
+  # Remove internally inconsistent records (Q22=0 but channels selected)
+  filter(is.na(flag) | flag == 0) %>%
+  mutate(
+    q24_fac = ordered(q24, levels = 0:2,
+                      labels = c("None","Info","Consultation")),
+    sat_ord = ordered(as.integer(satisfaction), levels = 1:5)
+  )
+
+cat("\nSample after cleaning:", nrow(df), "\n")
+cat("With satisfaction data:", sum(!is.na(df$satisfaction)), "\n")
+
+# Working subsets
+df_sat  <- df %>% filter(!is.na(satisfaction))
+df_full <- df %>% filter(!is.na(q22_bin), !is.na(info_score),
+                          !is.na(consult_score), !is.na(q24),
+                          !is.na(satisfaction))
+
+cat("Complete cases (all vars):", nrow(df_full), "\n")
+```
+
+---
+
+# Descriptive Statistics
+
+```{r descriptives}
+desc_vars <- df_sat %>%
+  dplyr::select(q22_bin, info_score, consult_score, q24, satisfaction) %>%
+  psych::describe() %>%
+  as.data.frame() %>%
+  dplyr::select(n, mean, sd, median, min, max, skew, kurtosis) %>%
+  round(3)
+
+desc_vars %>%
+  qtable(caption = "Table D1. Descriptive statistics — participation construct variables")
+```
+
+```{r dist-tables}
+# Q24 distribution
+q24_dist <- df_sat %>%
+  filter(!is.na(q24)) %>%
+  count(q24_fac) %>%
+  mutate(pct = round(100 * n / sum(n), 1))
+
+q24_dist %>%
+  qtable(caption = "Table D2. Q24 Participation Level distribution")
+
+# Q25 distribution
+q25_dist <- df_sat %>%
+  filter(!is.na(satisfaction)) %>%
+  count(satisfaction) %>%
+  mutate(pct = round(100 * n / sum(n), 1))
+
+q25_dist %>%
+  qtable(caption = "Table D3. Q25 Satisfaction distribution")
+
+# Group statistics: satisfaction by Q24 level
+grp_stats <- df_sat %>%
+  filter(!is.na(q24), !is.na(satisfaction)) %>%
+  group_by(q24_fac) %>%
+  summarise(
+    N      = n(),
+    Mean   = round(mean(satisfaction), 3),
+    Median = median(satisfaction),
+    SD     = round(sd(satisfaction), 3),
+    Min    = min(satisfaction),
+    Max    = max(satisfaction),
+    .groups = "drop"
+  )
+
+grp_stats %>%
+  qtable(caption = "Table D4. Satisfaction by Participation Level (Q24)")
+```
+
+---
+
+# Ceiling and Floor Effect Tests
+
+```{r ceiling-floor}
+sat_vec <- df_sat$satisfaction[!is.na(df_sat$satisfaction)]
+q24_vec <- df_sat$q24[!is.na(df_sat$q24)]
+
+ceil_prop   <- mean(sat_vec == 5)
+nearceil    <- mean(sat_vec >= 4)
+floor_q24   <- mean(q24_vec == 0)
+kurt_sat    <- psych::kurtosi(sat_vec)
+
+cat(sprintf("Q25 at ceiling (=5):       %.1f%%\n", 100*ceil_prop))
+cat(sprintf("Q25 near ceiling (≥4):     %.1f%%\n", 100*nearceil))
+cat(sprintf("Q24 at floor (=0):         %.1f%%  %s\n", 100*floor_q24,
+            ifelse(floor_q24 > 0.30, "⚠ floor effect", "✓ ok")))
+cat(sprintf("Q25 excess kurtosis:       %.3f\n", kurt_sat))
+
+# Shapiro-Wilk — confirms WLSMV/non-parametric requirement
+sw <- shapiro.test(sat_vec)
+cat(sprintf("\nShapiro-Wilk Q25: W=%.4f, p=%.4f → %s\n",
+            sw$statistic, sw$p.value,
+            ifelse(sw$p.value < 0.001, "Non-normal ***", "Normal")))
+```
+
+```{r ceiling-plots, fig.height=5}
+par(mfrow = c(1, 2))
+
+# Q25 histogram with ceiling annotation
+hist(sat_vec, breaks = 5, col = "#5DADE2", border = "white",
+     main = "Q25 Satisfaction Distribution",
+     xlab = "Satisfaction (1–5)", ylab = "Count")
+abline(v = 5.2, col = "red", lwd = 2, lty = 2)
+text(4.8, max(table(sat_vec)) * 0.9,
+     sprintf("Ceiling\n%.1f%%", 100*ceil_prop), col = "red", cex = 0.85)
+
+# Q24 bar chart with floor annotation
+barplot(table(q24_vec), col = c("#4C72B0","#55A868","#C44E52"),
+        names.arg = c("None (0)","Info (1)","Consult (2)"),
+        main = "Q24 Participation Level Distribution",
+        ylab = "Count")
+mtext(sprintf("Floor (0): %.1f%%", 100*floor_q24),
+      side = 3, line = -1.5, cex = 0.85, col = "darkorange")
+
+par(mfrow = c(1, 1))
+```
+
+```{r tobit-comparison}
+# Tobit regression: test whether OLS is biased by right-censoring at Q25=5.
+# If Tobit β substantially exceeds OLS β, the positive PL-PST association
+# may be inflated by the ceiling.
+# R's survival::survreg provides a Tobit (censored normal) model.
+
+library(survival)
+
+d_tob <- df_full %>%
+  mutate(
+    sat_cens = Surv(
+      time  = satisfaction,
+      time2 = satisfaction,
+      event = ifelse(satisfaction >= 5, 0, 1),   # 0 = right-censored at 5
+      type  = "interval2"
+    )
+  )
+
+# OLS reference
+ols_mod <- lm(satisfaction ~ q24, data = df_full)
+ols_b   <- coef(ols_mod)["q24"]
+ols_se  <- summary(ols_mod)$coefficients["q24","Std. Error"]
+
+# Tobit (right-censored at 5, left-censored at 1)
+tobit_mod <- survreg(
+  Surv(satisfaction, satisfaction < 5, type = "right") ~ q24,
+  data  = df_full,
+  dist  = "gaussian"
+)
+tobit_b <- coef(tobit_mod)["q24"]
+
+cat(sprintf("OLS   β(Q24→Q25) = %.4f  SE = %.4f\n", ols_b, ols_se))
+cat(sprintf("Tobit β(Q24→Q25) = %.4f\n", tobit_b))
+cat(sprintf("Ratio Tobit/OLS  = %.3f\n", tobit_b / ols_b))
+
+if (abs(tobit_b / ols_b - 1) < 0.10) {
+  cat("✓ Tobit and OLS agree (<10% diff) — censoring does NOT bias inference\n")
+} else {
+  cat("⚠ Tobit/OLS differ (>10%) — ceiling adjustment changes the estimate\n")
+}
+```
+
+---
+
+# Non-Parametric Tests
+
+```{r kruskal-wallis}
+# Split satisfaction by Q24 group
+g0 <- df_sat$satisfaction[df_sat$q24 == 0 & !is.na(df_sat$satisfaction)]
+g1 <- df_sat$satisfaction[df_sat$q24 == 1 & !is.na(df_sat$satisfaction)]
+g2 <- df_sat$satisfaction[df_sat$q24 == 2 & !is.na(df_sat$satisfaction)]
+
+kw  <- kruskal.test(satisfaction ~ q24_fac, data = df_sat)
+n_t <- length(g0) + length(g1) + length(g2)
+eps2 <- (kw$statistic - 2) / (n_t - 3)
+
+cat(sprintf("Kruskal-Wallis: H = %.4f, df = %d, p = %.4f\n",
+            kw$statistic, kw$parameter, kw$p.value))
+cat(sprintf("Effect size ε² = %.4f  (%s)\n", eps2,
+            ifelse(eps2 > 0.14, "large", ifelse(eps2 > 0.06, "medium", "small"))))
+```
+
+```{r mann-whitney}
+# Pairwise Mann-Whitney with Bonferroni correction
+mw_pairs <- list(
+  list("None vs Info",    g0, g1),
+  list("None vs Consult", g0, g2),
+  list("Info vs Consult", g1, g2)
+)
+
+mw_tbl <- purrr::map_dfr(mw_pairs, function(x) {
+  mw  <- wilcox.test(x[[2]], x[[3]], exact = FALSE)
+  r_b <- 1 - 2 * mw$statistic / (length(x[[2]]) * length(x[[3]]))
+  p_b <- min(mw$p.value * 3, 1)
+  data.frame(
+    Comparison = x[[1]],
+    U      = round(mw$statistic, 0),
+    p_bonf = round(p_b, 4),
+    r      = round(r_b, 3),
+    Sig    = case_when(p_b < 0.001 ~ "***", p_b < 0.01 ~ "**",
+                       p_b < 0.05  ~ "*",   TRUE         ~ "ns"),
+    stringsAsFactors = FALSE
+  )
+})
+
+mw_tbl %>%
+  qtable(caption = "Table NP1. Pairwise Mann-Whitney U (Bonferroni corrected)")
+```
+
+```{r jonckheere}
+# Jonckheere-Terpstra trend test: tests the ordered H1: None ≤ Info ≤ Consult
+# Implemented manually following Hollander & Wolfe (1999) because clinfun
+# may not be installed. J = sum of Mann-Whitney U for all ordered pairs.
+
+jt_groups <- list(g0, g1, g2)
+J <- 0
+for (i in seq_len(length(jt_groups) - 1)) {
+  for (j in seq(i + 1, length(jt_groups))) {
+    ga <- jt_groups[[i]]; gb <- jt_groups[[j]]
+    J  <- J + sum(outer(gb, ga, ">")) + 0.5 * sum(outer(gb, ga, "=="))
+  }
+}
+ns   <- sapply(jt_groups, length)
+N    <- sum(ns)
+E_J  <- (N^2 - sum(ns^2)) / 4
+all_vals <- unlist(jt_groups)
+tie_term <- sum(table(all_vals)^3 - table(all_vals))
+V_J  <- (N^2*(2*N+3) - sum(ns^2*(2*ns+3)) - tie_term) / 72
+z_jt <- (J - E_J) / sqrt(V_J)
+p_jt <- pnorm(z_jt, lower.tail = FALSE)  # one-tailed ascending
+
+cat(sprintf("Jonckheere-Terpstra: J = %.0f, E(J) = %.1f, z = %.4f, p = %.4f\n",
+            J, E_J, z_jt, p_jt))
+cat(ifelse(p_jt < 0.05,
+           "✓ Significant positive trend: satisfaction increases with participation level\n",
+           "✗ No significant monotone trend\n"))
+
+# Spearman and Kendall
+d_cor <- df_sat %>% filter(!is.na(q24), !is.na(satisfaction))
+sp    <- cor.test(d_cor$q24, d_cor$satisfaction, method = "spearman", exact = FALSE)
+ke    <- cor.test(d_cor$q24, d_cor$satisfaction, method = "kendall",  exact = FALSE)
+
+cat(sprintf("\nSpearman ρ(Q24, Q25) = %+.4f, p = %.4f\n", sp$estimate, sp$p.value))
+cat(sprintf("Kendall  τ(Q24, Q25) = %+.4f, p = %.4f\n", ke$estimate, ke$p.value))
+
+corr_tbl <- data.frame(
+  Test     = c("Spearman ρ","Kendall τ"),
+  Variable = "Q24 → Q25",
+  Estimate = round(c(sp$estimate, ke$estimate), 4),
+  p        = round(c(sp$p.value, ke$p.value), 4),
+  Sig      = ifelse(c(sp$p.value, ke$p.value) < 0.001, "***",
+             ifelse(c(sp$p.value, ke$p.value) < 0.01,  "**",
+             ifelse(c(sp$p.value, ke$p.value) < 0.05,  "*", "ns")))
+)
+corr_tbl %>%
+  qtable(caption = "Table NP2. Rank correlations Q24 ↔ Q25")
+```
+
+---
+
+# Ordinal Logistic Regression
+
+```{r ordinal-logit}
+# polr requires satisfaction as an ordered factor
+d_olr <- df_full %>%
+  mutate(sat_ord = ordered(as.integer(satisfaction), levels = 1:5))
+
+# Model 1: Q24 only (main participation construct)
+m1 <- polr(sat_ord ~ q24, data = d_olr, Hess = TRUE, method = "logistic")
+
+# Model 2: component indicators
+m2 <- polr(sat_ord ~ q22_bin + info_score + consult_score,
+           data = d_olr, Hess = TRUE, method = "logistic")
+
+tidy_polr <- function(m, label) {
+  co <- coef(summary(m))
+  p  <- pnorm(abs(co[,"t value"]), lower.tail = FALSE) * 2
+  n_pred <- length(coef(m))
+  data.frame(
+    Model    = label,
+    Term     = rownames(co)[seq_len(n_pred)],
+    beta     = round(co[seq_len(n_pred), "Value"],     4),
+    SE       = round(co[seq_len(n_pred), "Std. Error"],4),
+    OR       = round(exp(co[seq_len(n_pred), "Value"]),3),
+    p        = round(p[seq_len(n_pred)],                4),
+    Sig      = case_when(
+      p[seq_len(n_pred)] < 0.001 ~ "***",
+      p[seq_len(n_pred)] < 0.01  ~ "**",
+      p[seq_len(n_pred)] < 0.05  ~ "*",
+      TRUE ~ "ns"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+bind_rows(
+  tidy_polr(m1, "M1: Q24"),
+  tidy_polr(m2, "M2: Q22+info+consult")
+) %>%
+  qtable(caption = "Table OLR1. Ordinal Logistic Regression — Q25 as ordered DV")
+
+# McFadden pseudo-R²
+cat(sprintf("\nModel 1 pseudo-R² (McFadden) ≈ %.4f\n",
+            1 - logLik(m1) / logLik(update(m1, ~1))))
+cat(sprintf("Model 2 pseudo-R² (McFadden) ≈ %.4f\n",
+            1 - logLik(m2) / logLik(update(m2, ~1))))
+```
+
+---
+
+# SEM — Simplified Path Model (WLSMV)
+
+> Because only PL and PST constructs are available in this dataset, the HEPAF
+> structural model reduces to a single direct path PL → PST. With both
+> constructs as single-indicator latents, this is equivalent to a path
+> analysis / standardised regression. WLSMV is retained because the indicators
+> are ordinal and depart significantly from normality (Shapiro-Wilk p < .001).
+
+```{r sem-data}
+# Prepare ordinal data for lavaan
+# Q24 (0/1/2) → ordinal; Q25 (1–5) → ordinal
+sem_data <- df_full %>%
+  dplyr::select(q24, satisfaction) %>%
+  mutate(
+    q24_ord = ordered(as.integer(q24), levels = 0:2),
+    sat_ord = ordered(as.integer(satisfaction), levels = 1:5)
+  ) %>%
+  filter(complete.cases(.))
+
+cat("SEM complete cases: n =", nrow(sem_data), "\n")
+```
+
+```{r cfa-model}
+# CFA measurement model: single-indicator constructs for PL and PST.
+# Zero-residual constraints follow Hayduk (1987): with one indicator per
+# construct, all variance is attributed to the latent, and the model is
+# exactly identified at the measurement level.
+
+cfa_model <- '
+  PL  =~ q24_ord
+  PST =~ sat_ord
+
+  PL  ~~ 0*PL
+  PST ~~ 0*PST
+'
+
+fit_cfa <- cfa(
+  model     = cfa_model,
+  data      = sem_data,
+  estimator = "WLSMV",
+  ordered   = TRUE,
+  std.lv    = TRUE,
+  missing   = "listwise"
+)
+
+summary(fit_cfa, fit.measures = TRUE, standardized = TRUE)
+```
+
+```{r cfa-fit-table}
+fit_idx <- fitMeasures(fit_cfa,
+  c("chisq","df","pvalue","cfi","tli",
+    "rmsea","rmsea.ci.lower","rmsea.ci.upper","srmr","wrmr"))
+
+data.frame(
+  Index     = c("χ²","df","p","CFI","TLI",
+                "RMSEA","RMSEA CI lo","RMSEA CI hi","SRMR","WRMR"),
+  Value     = round(as.numeric(fit_idx), 3),
+  Threshold = c("—","—","—","≥.95","≥.95",
+                "≤.08","—","—","≤.08","≤1.00"),
+  Met = c("—","—","—",
+          ifelse(fit_idx["cfi"]  >= 0.95, "✓","✗"),
+          ifelse(fit_idx["tli"]  >= 0.95, "✓","✗"),
+          ifelse(fit_idx["rmsea"]<= 0.08, "✓","✗"),
+          "—","—",
+          ifelse(fit_idx["srmr"] <= 0.08, "✓","✗"),
+          ifelse(fit_idx["wrmr"] <= 1.00, "✓","✗"))
+) %>%
+  qtable(caption = "Table SEM-R1. CFA Fit Indices")
+```
+
+```{r structural-model}
+# Structural model: PL → PST (direct path)
+# PL is exogenous, so its residual is NOT fixed to zero (std.lv=TRUE handles
+# its variance). Only the endogenous PST single-indicator residual is fixed.
+
+sem_model <- '
+  PL  =~ q24_ord
+  PST =~ sat_ord
+
+  PST ~~ 0*PST
+
+  PST ~ PL
+'
+
+fit_sem <- sem(
+  model     = sem_model,
+  data      = sem_data,
+  estimator = "WLSMV",
+  ordered   = TRUE,
+  std.lv    = TRUE,
+  missing   = "listwise"
+)
+
+summary(fit_sem, fit.measures = TRUE, standardized = TRUE, rsquare = TRUE)
+```
+
+```{r sem-paths-table}
+params <- parameterEstimates(fit_sem, standardized = TRUE) %>%
+  filter(op == "~") %>%
+  dplyr::select(Outcome = lhs, Predictor = rhs,
+                b = est, SE = se, z, p = pvalue, beta_std = std.all) %>%
+  mutate(
+    across(c(b, SE, z, beta_std), ~ round(., 4)),
+    p   = round(p, 4),
+    Sig = case_when(p < 0.001 ~ "***", p < 0.01 ~ "**",
+                    p < 0.05  ~ "*",   TRUE       ~ "ns")
+  )
+
+params %>%
+  qtable(caption = "Table SEM-R2. Structural Path Coefficients (WLSMV)")
+
+r2_val <- lavInspect(fit_sem, "r2")
+cat(sprintf("\nR² (PST) = %.4f\n", r2_val["sat_ord"]))
+```
+
+```{r sem-path-diagram, fig.width=10, fig.height=6}
+semPaths(
+  fit_sem,
+  what        = "std",
+  whatLabels  = "std",
+  style       = "ram",
+  layout      = "tree2",
+  rotation    = 2,
+  edge.label.cex = 0.9,
+  sizeMan     = 7,
+  sizeLat     = 11,
+  color       = list(lat = c("#E65100","#1565C0"), man = "grey90"),
+  posCol      = "#1565C0",
+  negCol      = "#C62828",
+  title       = TRUE
+)
+title(main = "Figure SEM-1. PL → PST Path Model (standardised, WLSMV)",
+      cex.main = 0.9)
+```
+
+---
+
+# Mediation: Info/Consult Score → Q24 → Satisfaction
+
+> Tests whether the positive PL–PST association is mediated through the
+> participation level construct (Q24), or is driven directly by channel
+> engagement. Stage-1: info_score / consult_score → Q24. Stage-2: Q24 → Q25.
+> Bootstrap CI (5,000 resamples).
+
+```{r mediation}
+library(mediation)
+
+med_data <- df_full %>%
+  dplyr::select(info_score, consult_score, q24, satisfaction) %>%
+  na.omit()
+
+cat("Mediation n =", nrow(med_data), "\n")
+
+# Rank-transform for ordinal consistency
+med_r <- as.data.frame(lapply(med_data, rank, ties.method = "average"))
+
+run_mediation <- function(mediator, outcome, treatment, data, n_boot = 5000) {
+  f_med <- as.formula(paste(mediator, "~", treatment))
+  f_out <- as.formula(paste(outcome,  "~", mediator, "+", treatment))
+  m_med <- lm(f_med, data = data)
+  m_out <- lm(f_out, data = data)
+  set.seed(2024)
+  med_res <- mediate(m_med, m_out,
+                     treat = treatment, mediator = mediator,
+                     boot = TRUE, sims = n_boot, boot.ci.type = "perc")
+  data.frame(
+    Treatment = treatment,
+    Mediator  = mediator,
+    Outcome   = outcome,
+    ACME      = round(med_res$d.avg,    4),
+    CI_lo     = round(med_res$d.avg.ci[1], 4),
+    CI_hi     = round(med_res$d.avg.ci[2], 4),
+    p_ACME    = round(med_res$d.avg.p,  4),
+    ADE       = round(med_res$z.avg,    4),
+    p_ADE     = round(med_res$z.avg.p,  4),
+    Sig       = ifelse(med_res$d.avg.ci[1] > 0 | med_res$d.avg.ci[2] < 0,
+                       "Yes ✓", "No"),
+    stringsAsFactors = FALSE
+  )
+}
+
+med_tbl <- bind_rows(
+  run_mediation("q24", "satisfaction", "info_score",    med_r),
+  run_mediation("q24", "satisfaction", "consult_score", med_r)
+)
+
+med_tbl %>%
+  qtable(caption = "Table MED1. Mediation: channel scores → Q24 → Satisfaction (5000 bootstrap resamples)")
+```
+
+---
+
+# Expectation Gap Theory — Formal Assessment
+
+```{r egt-assessment}
+med0 <- median(g0, na.rm=TRUE)
+med1 <- median(g1, na.rm=TRUE)
+med2 <- median(g2, na.rm=TRUE)
+mn0  <- mean(g0, na.rm=TRUE)
+mn1  <- mean(g1, na.rm=TRUE)
+mn2  <- mean(g2, na.rm=TRUE)
+
+cat("EGT predicts: consultation participants (Q24=2) LESS satisfied than\n")
+cat("non-participants (Q24=0) because raised expectations go unmet.\n\n")
+cat(sprintf("Median: None=%.2f  Info=%.2f  Consult=%.2f\n", med0, med1, med2))
+cat(sprintf("Mean:   None=%.3f  Info=%.3f  Consult=%.3f\n", mn0,  mn1,  mn2))
+
+# Levene test of variance homogeneity
+d_lev <- df_sat %>%
+  filter(!is.na(q24), !is.na(satisfaction)) %>%
+  mutate(q24_fac = factor(q24))
+
+lev_test <- car::leveneTest(satisfaction ~ q24_fac, data = d_lev)
+cat(sprintf("\nLevene's test: F=%.4f, p=%.4f\n",
+            lev_test$`F value`[1], lev_test$`Pr(>F)`[1]))
+
+sd_by_grp <- tapply(df_sat$satisfaction[!is.na(df_sat$q24)],
+                     df_sat$q24[!is.na(df_sat$q24)], sd, na.rm=TRUE)
+cat(sprintf("SD by group: None=%.3f  Info=%.3f  Consult=%.3f\n",
+            sd_by_grp[1], sd_by_grp[2], sd_by_grp[3]))
+
+# Cohen's d (Consult vs None)
+pooled_sd <- sqrt((sd(g0)^2 + sd(g2)^2) / 2)
+d_cohen   <- (mean(g2) - mean(g0)) / pooled_sd
+cat(sprintf("\nCohen's d (Consult − None) = %+.4f  (%s)\n", d_cohen,
+            ifelse(abs(d_cohen) > 0.8, "large",
+            ifelse(abs(d_cohen) > 0.5, "medium", "small"))))
+
+# Polynomial trend
+d_poly <- df_sat %>% filter(!is.na(q24), !is.na(satisfaction)) %>%
+  mutate(q24_sq = q24^2)
+lin_m  <- lm(satisfaction ~ q24,         data = d_poly)
+quad_m <- lm(satisfaction ~ q24 + q24_sq, data = d_poly)
+av     <- anova(lin_m, quad_m)
+cat(sprintf("\nPolynomial test (quadratic): F=%.4f, p=%.4f\n",
+            av$F[2], av$`Pr(>F)`[2]))
+
+# Verdict
+eg_conf <- med2 < med0 | (sp$estimate < 0 & sp$p.value < 0.05)
+cat("\n", paste(rep("─",50), collapse=""), "\n")
+cat("VERDICT — Expectation Gap Theory:\n")
+if (eg_conf) {
+  cat("  CONFIRMED: consultation participants show lower satisfaction.\n")
+} else {
+  cat("  NOT CONFIRMED: positive monotone trend detected.\n")
+  cat("  Process Fairness / Empowerment theory better fits the data.\n")
+  cat("  Being included in the process (even passively) raises satisfaction.\n")
+}
+```
+
+```{r egt-viz, fig.height=5}
+ggplot(df_sat %>% filter(!is.na(q24), !is.na(satisfaction)),
+       aes(x = q24_fac, y = satisfaction, fill = q24_fac)) +
+  geom_boxplot(alpha = 0.7, notch = FALSE, outlier.shape = 21) +
+  geom_jitter(width = 0.15, alpha = 0.4, size = 1.5) +
+  stat_summary(fun = mean, geom = "point", shape = 18, size = 4,
+               colour = "white", show.legend = FALSE) +
+  scale_fill_manual(values = c("None"="#4C72B0","Info"="#55A868","Consultation"="#C44E52")) +
+  labs(
+    title    = "Satisfaction (Q25) by Participation Level (Q24)",
+    subtitle = sprintf("KW: H=%.2f, p=%.3f | JT: z=%.2f, p=%.4f | ρ=%.3f",
+                       kw$statistic, kw$p.value, z_jt, p_jt, sp$estimate),
+    x = "Participation Level (Q24)",
+    y = "Project Satisfaction (Q25, 1–5)",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+# Hypothesis Summary
+
+```{r hypothesis-summary}
+# Collect all test results into a single summary table
+
+hyp_tbl <- data.frame(
+  Hypothesis = c("H5 direct","EGT","CEL","JT"),
+  Statement  = c(
+    "PL → PST (positive direct path)",
+    "Higher PL → lower PST (expectation gap)",
+    "OLS biased by ceiling at Q25=5",
+    "Monotone positive trend PL: None≤Info≤Consult"
+  ),
+  Key_statistic = c(
+    sprintf("β=%.3f, p=%.4f", params$b[1], params$p[1]),
+    sprintf("ρ=%+.3f, p=%.4f; d=%+.3f", sp$estimate, sp$p.value, d_cohen),
+    sprintf("Tobit/OLS ratio=%.3f", tobit_b / ols_b),
+    sprintf("z=%.3f, p=%.4f", z_jt, p_jt)
+  ),
+  Result = c(
+    ifelse(params$p[1] < 0.05, "Supported ✓", "Not supported"),
+    ifelse(eg_conf, "Confirmed ✓", "NOT confirmed ✗"),
+    ifelse(abs(tobit_b / ols_b - 1) > 0.10,
+           "Mild ceiling (~10%)", "No bias ✓"),
+    ifelse(p_jt < 0.05, "Confirmed ✓", "Not confirmed")
+  ),
+  stringsAsFactors = FALSE
+)
+
+hyp_tbl %>%
+  qtable(caption = "Table H1. Hypothesis Resolution Summary")
+```
+
+---
+
+# Session Info
+
+```{r session-info}
+sessionInfo()
+```
+
+---
+
+# References
+
+- Hollander, M., & Wolfe, D. A. (1999). *Nonparametric Statistical Methods* (2nd ed.). Wiley.
+- Hu, L., & Bentler, P. M. (1999). Cutoff criteria for fit indexes in covariance structure analysis. *Structural Equation Modeling, 6*(1), 1–55.
+- Rhemtulla, M., Brosseau-Liard, P. É., & Savalei, V. (2012). When can categorical variables be treated as continuous? *Psychological Methods, 17*(3), 354–373.
+- Rosseel, Y. (2012). lavaan: An R package for structural equation modeling. *Journal of Statistical Software, 48*(2), 1–36.
+- Tobin, J. (1958). Estimation of relationships for limited dependent variables. *Econometrica, 26*(1), 24–36.

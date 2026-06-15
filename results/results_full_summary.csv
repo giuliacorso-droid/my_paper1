@@ -1,0 +1,32 @@
+Metric,Value
+N (with satisfaction),115
+N (complete cases),78
+Q25 at ceiling (=5),9.6%
+Q24 at floor (=0),33.3%
+Tobit/OLS ratio,1.101
+Censoring bias present,True
+Shapiro-Wilk Q25 p,0.0000
+Kruskal-Wallis H,10.9959
+Kruskal-Wallis p,0.0041
+Effect size ε²,0.0833
+None vs Consult MW p_bonf,0.0046
+None vs Consult r (rank-bis.),0.387
+Jonckheere-Terpstra z,3.1188
+Jonckheere-Terpstra p,0.0009
+Spearman ρ (Q24↔Q25),0.3089
+Spearman p,0.0010
+Ordinal logit β (Q24),1.0924
+Ordinal logit p (Q24),0.0002
+PLS β (PL→PST),0.2987
+PLS p,0.0079
+PLS CI 95%,"[0.0505, 0.4605]"
+PLS R²,0.0892
+PLS Q²,0.0165
+Cohen's d (Consult−None),0.7932
+Levene F (variance homog.),1.7487
+Levene p,0.1789
+Consult SD > None SD,False
+XGBoost CV R²,0.0901±0.2785
+SHAP top feature,part_composite
+SHAP Q24 direction,positive
+Expectation Gap confirmed,False
