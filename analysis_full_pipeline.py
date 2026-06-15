@@ -341,16 +341,22 @@ for var_name, col in [("Q24", "q24"), ("info_score", "info_score"),
         print(f"  {var_name} ↔ Q25: insufficient data")
 
 # Jonckheere-Terpstra trend test (manual implementation)
+# J = sum over all ordered pairs (i<j) of U(group_i < group_j).
+# Large J indicates that later groups tend to have LARGER values (increasing trend).
 def jonckheere_terpstra(groups_data):
     """
     Manual Jonckheere-Terpstra trend test.
-    groups_data: list of arrays in ordered group sequence.
-    Returns J statistic, z-score, p-value (one-tailed, ordered alternative).
+    groups_data: list of arrays in ordered group sequence (g0, g1, ...).
+    J = sum_{i<j} #{(a,b): a in g_i, b in g_j, a < b}
+    Large J -> increasing trend. Returns J, z, p (one-tailed upper).
     """
     k = len(groups_data)
     J = 0
     for i in range(k - 1):
         for j in range(i + 1, k):
+            # Count pairs where g_i member < g_j member
+            # mannwhitneyu with alternative='less' gives P(X<Y) based U statistic
+            # U_less = #{(a,b): a in g_i, b in g_j, a < b} + 0.5*ties
             u, _ = stats.mannwhitneyu(groups_data[i], groups_data[j],
                                        alternative="less")
             J += u
