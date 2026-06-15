@@ -354,12 +354,13 @@ def jonckheere_terpstra(groups_data):
     J = 0
     for i in range(k - 1):
         for j in range(i + 1, k):
-            # Count pairs where g_i member < g_j member
-            # mannwhitneyu with alternative='less' gives P(X<Y) based U statistic
-            # U_less = #{(a,b): a in g_i, b in g_j, a < b} + 0.5*ties
-            u, _ = stats.mannwhitneyu(groups_data[i], groups_data[j],
-                                       alternative="less")
-            J += u
+            # scipy mannwhitneyu returns U1 = #{(a,b): a in g_i, b in g_j, a > b}
+            # For increasing-trend JT we need #{a < b} = n_i*n_j - U1
+            ni = len(groups_data[i])
+            nj = len(groups_data[j])
+            u1, _ = stats.mannwhitneyu(groups_data[i], groups_data[j],
+                                        alternative="two-sided")
+            J += (ni * nj - u1)  # #{a_i < a_j}
     n = [len(g) for g in groups_data]
     N = sum(n)
     E_J = (N**2 - sum(ni**2 for ni in n)) / 4
