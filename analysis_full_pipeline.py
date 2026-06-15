@@ -44,19 +44,47 @@ DATA_PATH = (
 )
 
 print("=" * 70)
-print("DATA LOADING")
+print("SECTION 0: DATA LOADING AND CLEANING")
 print("=" * 70)
 
 raw = pd.read_excel(DATA_PATH, engine="openpyxl")
 
+print("All column names (before mapping):")
+for i, c in enumerate(raw.columns):
+    print(f"  [{i}] {repr(c)}")
+
+# Map columns by partial name match (case-insensitive)
+def _find_col(df, *keywords):
+    """Return first column whose lower-cased text contains ALL keywords."""
+    for c in df.columns:
+        cl = c.lower().replace("\n", " ")
+        if all(kw in cl for kw in keywords):
+            return c
+    raise KeyError(f"No column matching {keywords!r}")
+
+col_q22   = _find_col(raw, "q22", "binary")
+col_info  = _find_col(raw, "info provision", "score")
+col_cons  = _find_col(raw, "consultation", "score")
+col_q24   = _find_col(raw, "q24", "ordinal")
+col_q25   = _find_col(raw, "q25", "clean")
+col_flag  = _find_col(raw, "flag", "inconsistent")
+
+print(f"\nMapped columns (partial-name match):")
+print(f"  q22         -> {repr(col_q22)}")
+print(f"  info_score  -> {repr(col_info)}")
+print(f"  cons_score  -> {repr(col_cons)}")
+print(f"  q24         -> {repr(col_q24)}")
+print(f"  q25/sat     -> {repr(col_q25)}")
+print(f"  flag        -> {repr(col_flag)}")
+
 # Explicit column mapping — column names contain literal newlines from Excel
 raw = raw.rename(columns={
-    "Q22\nBinary\n(0/1)"                  : "q22",
-    "Info Provision\nSCORE\n(0–1)"        : "info_score",
-    "Consultation\nSCORE\n(0–1)"          : "consult_score",
-    "Q24\nOrdinal\n(0/1/2)"               : "q24",
-    "Q25\nClean\n(1–5; DK→NaN)"           : "satisfaction",
-    "FLAG\nInconsistent\n(Q22=0 but channel selected)": "flag",
+    col_q22:  "q22",
+    col_info: "info_score",
+    col_cons: "consult_score",
+    col_q24:  "q24",
+    col_q25:  "satisfaction",
+    col_flag: "flag",
 })
 
 # Remove internally inconsistent records and cast to numeric
