@@ -2,703 +2,833 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import matplotlib.patheffects as pe
 import numpy as np
 import pandas as pd
 import os
 import warnings
-from scipy import stats
-from scipy.optimize import minimize
+warnings.filterwarnings("ignore")
 
-warnings.filterwarnings('ignore')
-os.makedirs('/home/user/my_paper1/results', exist_ok=True)
+RESULTS = "/home/user/my_paper1/results"
+os.makedirs(RESULTS, exist_ok=True)
 
-RESULTS_DIR = '/home/user/my_paper1/results'
-DATA_PATH = '/root/.claude/uploads/7e325fe5-5704-55cc-9ede-a4a3bdde6097/4372d09e-Participation_Constructs.xlsx'
+DATA_PATH = (
+    "/root/.claude/uploads/7e325fe5-5704-55cc-9ede-a4a3bdde6097/"
+    "4372d09e-Participation_Constructs.xlsx"
+)
 
-# ============================================================
-# SECTION 0: DATA LOADING AND CLEANING
-# ============================================================
-print("=" * 60)
+# ==============================================================================
+# SECTION 0 - DATA LOADING AND CLEANING
+# ==============================================================================
+print("=" * 70)
 print("SECTION 0: DATA LOADING AND CLEANING")
-print("=" * 60)
+print("=" * 70)
 
-raw = pd.read_excel(DATA_PATH, engine='openpyxl')
-print("Shape:", raw.shape)
+raw = pd.read_excel(DATA_PATH, engine="openpyxl", header=0)
+print("Raw column names:")
+for i, c in enumerate(raw.columns):
+    print(f"  [{i:2d}] {repr(c)}")
 
-# Explicit mapping — column names contain literal newlines from Excel
-# Using multi-keyword match to be robust to minor header variations
+# IMPORTANT: column names in this Excel file contain literal newline characters.
+# Single-keyword matching is NOT sufficient — multiple keywords are required to
+# avoid mapping to the wrong column (e.g. "q22" matches Q22\nRaw before Q22\nBinary).
+# DO NOT replace this with single-token find_col logic.
 def _find_col(df, *keywords):
-    """Return first column whose lower-cased name contains ALL keywords."""
+    """Return first column whose normalised name contains ALL keywords."""
     for c in df.columns:
         cl = str(c).lower().replace("\n", " ")
         if all(kw in cl for kw in keywords):
             return c
     raise KeyError(f"No column matching {keywords!r}. Columns: {list(df.columns)}")
 
-col_q22  = _find_col(raw, "q22", "binary")
-col_info = _find_col(raw, "info provision", "score")
-col_cons = _find_col(raw, "consultation", "score")
-col_q24  = _find_col(raw, "q24", "ordinal")
-col_sat  = _find_col(raw, "q25", "clean")
-col_flag = _find_col(raw, "flag", "inconsistent")
+col_q22  = _find_col(raw, "q22", "binary")          # Q22\nBinary\n(0/1)
+col_info = _find_col(raw, "info provision", "score") # Info Provision\nSCORE\n(0–1)
+col_cons = _find_col(raw, "consultation", "score")   # Consultation\nSCORE\n(0–1)
+col_q24  = _find_col(raw, "q24", "ordinal")          # Q24\nOrdinal\n(0/1/2)
+col_q25  = _find_col(raw, "q25", "clean")            # Q25\nClean\n(1–5; DK→NaN)
+col_flag = _find_col(raw, "flag", "inconsistent")    # FLAG\nInconsistent\n...
 
-print(f"Mapped: q22={col_q22!r}, info={col_info!r}, consult={col_cons!r}")
-print(f"        q24={col_q24!r}, sat={col_sat!r}, flag={col_flag!r}")
+print(f"\nMapped columns:")
+print(f"  q22   -> {repr(col_q22)}")
+print(f"  info  -> {repr(col_info)}")
+print(f"  cons  -> {repr(col_cons)}")
+print(f"  q24   -> {repr(col_q24)}")
+print(f"  q25   -> {repr(col_q25)}")
+print(f"  flag  -> {repr(col_flag)}")
 
-df_raw = raw.rename(columns={
-    col_q22: 'q22', col_info: 'info_score', col_cons: 'consult_score',
-    col_q24: 'q24', col_sat: 'satisfaction', col_flag: 'flag',
-})
+work = raw[[col_q22, col_info, col_cons, col_q24, col_q25, col_flag]].copy()
+work.columns = ["q22", "info_score", "consult_score", "q24", "q25", "flag"]
 
-needed = ['q22', 'info_score', 'consult_score', 'q24', 'satisfaction']
+for c in ["q22", "info_score", "consult_score", "q24", "q25"]:
+    work[c] = pd.to_numeric(work[c], errors="coerce")
+work["flag"] = pd.to_numeric(work["flag"], errors="coerce").fillna(0)
 
-# Remove internally inconsistent records
-df = df_raw[df_raw['flag'].fillna(0) != 1].reset_index(drop=True)
+work    = work[work["flag"] != 1].reset_index(drop=True)
+df      = work[["q22", "info_score", "consult_score", "q24", "q25", "flag"]].copy()
+df_sat  = df.dropna(subset=["q25"]).reset_index(drop=True)
+df_full = df.dropna(subset=["q22", "info_score", "consult_score", "q24", "q25"]).reset_index(drop=True)
 
-for c in needed:
-    df[c] = pd.to_numeric(df[c], errors='coerce')
+print(f"\nSample sizes after removing flag==1:")
+print(f"  df       (all rows)   : N = {len(df)}")
+print(f"  df_sat   (q25 present): N = {len(df_sat)}")
+print(f"  df_full  (complete)   : N = {len(df_full)}")
 
-df_sat  = df.dropna(subset=['satisfaction']).reset_index(drop=True)
-df_full = df.dropna(subset=needed).reset_index(drop=True)
-
-print(f"\nSample sizes:")
-print(f"  Full cleaned df: n={len(df)}")
-print(f"  With satisfaction: n={len(df_sat)}")
-print(f"  Complete cases: n={len(df_full)}")
-
-# ============================================================
-# SECTION 1: DESCRIPTIVE STATISTICS
-# ============================================================
-print("\n" + "=" * 60)
+# ==============================================================================
+# SECTION 1 - DESCRIPTIVE STATISTICS
+# ==============================================================================
+print("\n" + "=" * 70)
 print("SECTION 1: DESCRIPTIVE STATISTICS")
-print("=" * 60)
+print("=" * 70)
 
+from scipy import stats as sp_stats
+
+vars_desc = ["q22", "info_score", "consult_score", "q24", "q25"]
 desc_rows = []
-for c in needed:
-    s = df[c].dropna()
+for v in vars_desc:
+    col_data = df[v].dropna()
     desc_rows.append({
-        'Variable': c,
-        'N': len(s),
-        'Mean': round(s.mean(), 3),
-        'Median': round(s.median(), 3),
-        'SD': round(s.std(), 3),
-        'Min': round(s.min(), 3),
-        'Max': round(s.max(), 3),
-        'Skew': round(stats.skew(s), 3),
-        'Kurtosis': round(stats.kurtosis(s), 3)
+        "variable" : v,
+        "N"        : int(col_data.count()),
+        "mean"     : col_data.mean(),
+        "median"   : col_data.median(),
+        "SD"       : col_data.std(),
+        "min"      : col_data.min(),
+        "max"      : col_data.max(),
+        "skew"     : float(sp_stats.skew(col_data)),
+        "kurtosis" : float(sp_stats.kurtosis(col_data)),
     })
-
-desc_df = pd.DataFrame(desc_rows)
-print("\nDescriptive Statistics:")
-print(desc_df.to_string(index=False))
-
+desc_table = pd.DataFrame(desc_rows).set_index("variable")
+print("\nDescriptive statistics:")
+print(desc_table.to_string(float_format="{:.3f}".format))
 print("\nQ24 value counts:")
-print(df['q24'].value_counts().sort_index())
-print("\nSatisfaction (Q25) value counts:")
-print(df['satisfaction'].value_counts().sort_index())
+print(df["q24"].value_counts().sort_index())
+print("\nQ25 value counts:")
+print(df["q25"].value_counts().sort_index())
 
-# ============================================================
-# SECTION 2: CEILING AND FLOOR EFFECT TESTS
-# ============================================================
-print("\n" + "=" * 60)
-print("SECTION 2: CEILING AND FLOOR EFFECT TESTS")
-print("=" * 60)
+# ==============================================================================
+# SECTION 2 - CEILING / FLOOR EFFECTS + TOBIT
+# ==============================================================================
+print("\n" + "=" * 70)
+print("SECTION 2: CEILING/FLOOR EFFECTS + TOBIT")
+print("=" * 70)
 
-q24_valid = df['q24'].dropna()
-q25_valid = df_sat['satisfaction']
+from scipy.optimize import minimize
+from numpy.linalg import lstsq as np_lstsq
 
-floor_q24_0     = (q24_valid == 0).mean()
-floor_q24_01    = (q24_valid <= 1).mean()
-ceiling_q25_5   = (q25_valid == 5).mean()
-ceiling_q25_45  = (q25_valid >= 4).mean()
+q24_valid = df["q24"].dropna()
+floor_q24_0  = (q24_valid == 0).mean()
+floor_q24_01 = (q24_valid <= 1).mean()
+print(f"\nFloor effects on Q24:")
+print(f"  Proportion at 0      : {floor_q24_0:.3f}")
+print(f"  Proportion at 0 or 1 : {floor_q24_01:.3f}")
 
-print(f"\nFloor effects (Q24):")
-print(f"  Proportion at 0:   {floor_q24_0:.3f}")
-print(f"  Proportion at 0+1: {floor_q24_01:.3f}")
-print(f"\nCeiling effects (Q25):")
-print(f"  Proportion at 5:   {ceiling_q25_5:.3f}")
-print(f"  Proportion at 4+5: {ceiling_q25_45:.3f}")
+q25_valid = df_sat["q25"].dropna()
+ceil_q25_5  = (q25_valid == 5).mean()
+ceil_q25_45 = (q25_valid >= 4).mean()
+print(f"\nCeiling effects on Q25:")
+print(f"  Proportion at 5      : {ceil_q25_5:.3f}")
+print(f"  Proportion at 4 or 5 : {ceil_q25_45:.3f}")
 
-kurt_q25 = stats.kurtosis(q25_valid)
-print(f"\nKurtosis Q25: {kurt_q25:.3f}")
-if abs(kurt_q25) > 1:
-    print("  -> Non-normal distribution indicated (|kurtosis| > 1)")
-else:
-    print("  -> Roughly normal kurtosis")
+tobit_data = df_full[["q24", "q25"]].dropna().copy()
+y_t     = tobit_data["q25"].values
+x_t     = tobit_data["q24"].values
+X_tobit = np.column_stack([np.ones(len(x_t)), x_t])
+L_t, U_t = 1.0, 5.0
 
-# Tobit regression (two-limit, lower=1, upper=5)
-def tobit_loglik(params, y, X, lo=1, hi=5):
-    beta = params[:-1]
+def tobit_neg_loglik(params):
+    beta      = params[:-1]
     log_sigma = params[-1]
-    sigma = np.exp(log_sigma)
-    xb = X @ beta
+    sigma     = np.exp(log_sigma)
+    if sigma <= 0:
+        return 1e10
+    xb = X_tobit @ beta
     ll = 0.0
-    for yi, xbi in zip(y, xb):
-        if yi <= lo:
-            ll += np.log(stats.norm.cdf((lo - xbi) / sigma) + 1e-15)
-        elif yi >= hi:
-            ll += np.log(1 - stats.norm.cdf((hi - xbi) / sigma) + 1e-15)
+    for i in range(len(y_t)):
+        if y_t[i] <= L_t:
+            p = sp_stats.norm.cdf((L_t - xb[i]) / sigma)
+            ll += np.log(max(p, 1e-15))
+        elif y_t[i] >= U_t:
+            p = 1.0 - sp_stats.norm.cdf((U_t - xb[i]) / sigma)
+            ll += np.log(max(p, 1e-15))
         else:
-            ll += stats.norm.logpdf(yi, xbi, sigma)
+            ll += sp_stats.norm.logpdf(y_t[i], xb[i], sigma)
     return -ll
 
-tobit_data = df_full[['q24', 'satisfaction']].dropna().reset_index(drop=True)
-y_t = tobit_data['satisfaction'].values
-X_t = np.column_stack([np.ones(len(y_t)), tobit_data['q24'].values])
+beta_ols, _, _, _ = np_lstsq(X_tobit, y_t, rcond=None)
+sigma_ols = np.std(y_t - X_tobit @ beta_ols)
+x0_tobit  = np.append(beta_ols, np.log(max(sigma_ols, 0.01)))
 
-ols_res = np.linalg.lstsq(X_t, y_t, rcond=None)
-beta_ols = ols_res[0]
-print(f"\nOLS: intercept={beta_ols[0]:.3f}, beta_q24={beta_ols[1]:.3f}")
+res_tobit            = minimize(tobit_neg_loglik, x0_tobit, method="Nelder-Mead",
+                                options={"maxiter": 10000, "xatol": 1e-6, "fatol": 1e-6})
+tobit_beta_intercept = res_tobit.x[0]
+tobit_beta_q24       = res_tobit.x[1]
+tobit_sigma          = np.exp(res_tobit.x[2])
 
-init_params = np.append(beta_ols, np.log(np.std(y_t)))
-result = minimize(tobit_loglik, init_params, args=(y_t, X_t, 1, 5),
-                  method='Nelder-Mead', options={'maxiter': 5000, 'xatol': 1e-6})
-beta_tobit = result.x[:-1]
-print(f"Tobit: intercept={beta_tobit[0]:.3f}, beta_q24={beta_tobit[1]:.3f}")
-print(f"  OLS beta={beta_ols[1]:.3f} vs Tobit beta={beta_tobit[1]:.3f}")
-if abs(beta_tobit[1]) > abs(beta_ols[1]):
-    print("  -> Tobit > OLS: ceiling/floor censoring attenuated OLS estimate")
-else:
-    print("  -> Tobit ~= OLS: censoring not severe")
+print(f"\nOLS:   intercept={beta_ols[0]:.3f}, beta_q24={beta_ols[1]:.3f}")
+print(f"Tobit: intercept={tobit_beta_intercept:.3f}, beta_q24={tobit_beta_q24:.3f}, sigma={tobit_sigma:.3f}")
+print(f"Tobit converged: {res_tobit.success}")
 
-# Figures
-fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+fig, ax = plt.subplots(figsize=(7, 4))
+ax.hist(q25_valid, bins=np.arange(0.5, 6.5, 1), density=True,
+        color="steelblue", edgecolor="white", alpha=0.8, label="Q25")
+xp = np.linspace(1, 5, 200)
+ax.plot(xp, sp_stats.norm.pdf(xp, q25_valid.mean(), q25_valid.std()),
+        "r-", lw=2, label="Normal fit")
+ax.axvline(5, color="orange", ls="--", lw=1.5, label="Ceiling (5)")
+ax.set_xlabel("Q25 Satisfaction (1-5)")
+ax.set_ylabel("Density")
+ax.set_title("Q25 Distribution with Normal Overlay")
+ax.legend()
+fig.tight_layout()
+fig.savefig(os.path.join(RESULTS, "hist_q25_normal.png"), dpi=150)
+plt.close(fig)
 
-# Q25 histogram with normal overlay
-ax = axes[0]
-ax.hist(q25_valid, bins=np.arange(0.5, 6.5, 1), density=True, alpha=0.7, color='steelblue', edgecolor='white')
-xn = np.linspace(1, 5, 200)
-ax.plot(xn, stats.norm.pdf(xn, q25_valid.mean(), q25_valid.std()), 'r-', lw=2, label='Normal overlay')
-ax.axvline(5, color='orange', ls='--', label=f'Ceiling=5 ({ceiling_q25_5:.1%})')
-ax.set_xlabel('Satisfaction (Q25)'); ax.set_ylabel('Density')
-ax.set_title('Q25 Distribution with Normal Overlay'); ax.legend()
+fig, ax = plt.subplots(figsize=(6, 4))
+cnt24 = q24_valid.value_counts().sort_index()
+ax.bar(cnt24.index, cnt24.values, color="teal", edgecolor="white", alpha=0.85)
+ax.set_xlabel("Q24 Participation Level")
+ax.set_ylabel("Count")
+ax.set_title("Q24 Participation Level Distribution")
+ax.set_xticks([0, 1, 2])
+fig.tight_layout()
+fig.savefig(os.path.join(RESULTS, "hist_q24.png"), dpi=150)
+plt.close(fig)
 
-# Q24 histogram
-ax = axes[1]
-ax.hist(q24_valid, bins=[-0.5, 0.5, 1.5, 2.5], rwidth=0.8, color='teal', edgecolor='white')
-ax.set_xlabel('Q24 Participation Level'); ax.set_ylabel('Count')
-ax.set_title('Q24 Distribution'); ax.set_xticks([0, 1, 2])
+g0 = df_sat[df_sat["q24"] == 0]["q25"].dropna()
+g1 = df_sat[df_sat["q24"] == 1]["q25"].dropna()
+g2 = df_sat[df_sat["q24"] == 2]["q25"].dropna()
+gdata = [g0.values, g1.values, g2.values]
 
-# Boxplot by group
-ax = axes[2]
-groups = [df_full[df_full['q24'] == g]['satisfaction'].values for g in [0, 1, 2]]
-ax.boxplot(groups, patch_artist=True,
-           boxprops=dict(facecolor='lightblue'))
-ax.set_xlabel('Q24 Group'); ax.set_ylabel('Satisfaction')
-ax.set_title('Satisfaction by Q24 Group')
+fig, ax = plt.subplots(figsize=(7, 5))
+ax.boxplot(gdata,
+           tick_labels=["Q24=0\n(None)", "Q24=1\n(Informed)", "Q24=2\n(Consulted)"],
+           patch_artist=True,
+           boxprops=dict(facecolor="lightblue"),
+           medianprops=dict(color="navy", lw=2))
+ax.set_ylabel("Q25 Satisfaction (1-5)")
+ax.set_title("Satisfaction by Participation Level")
+fig.tight_layout()
+fig.savefig(os.path.join(RESULTS, "boxplot_sat_q24.png"), dpi=150)
+plt.close(fig)
+print("\nFigures saved: hist_q25_normal.png, hist_q24.png, boxplot_sat_q24.png")
 
-plt.tight_layout()
-plt.savefig(os.path.join(RESULTS_DIR, 'section2_ceiling_floor.png'), dpi=150, bbox_inches='tight')
-plt.close()
-print("\nSaved: section2_ceiling_floor.png")
-
-# ============================================================
-# SECTION 3: NON-PARAMETRIC TESTS
-# ============================================================
-print("\n" + "=" * 60)
+# ==============================================================================
+# SECTION 3 - NON-PARAMETRIC TESTS
+# ==============================================================================
+print("\n" + "=" * 70)
 print("SECTION 3: NON-PARAMETRIC TESTS")
-print("=" * 60)
+print("=" * 70)
 
-# Shapiro-Wilk
-sw_stat, sw_p = stats.shapiro(q25_valid)
+sw_stat, sw_p = sp_stats.shapiro(q25_valid)
 print(f"\nShapiro-Wilk on Q25: W={sw_stat:.4f}, p={sw_p:.4f}")
-print(f"  -> {'Non-normal' if sw_p < 0.05 else 'Cannot reject normality'}")
 
-# Kruskal-Wallis
-groups_kw = [df_full[df_full['q24'] == g]['satisfaction'].dropna().values for g in [0, 1, 2]]
-H, p_kw = stats.kruskal(*groups_kw)
-n_total = sum(len(g) for g in groups_kw)
-eps_sq = (H - len(groups_kw) + 1) / (n_total - len(groups_kw))
-print(f"\nKruskal-Wallis: H={H:.3f}, p={p_kw:.4f}, e2={eps_sq:.3f}")
+kw_H, kw_p = sp_stats.kruskal(g0, g1, g2)
+N_kw = len(g0) + len(g1) + len(g2)
+eps_sq = (kw_H - 2) / (N_kw - 3)
+print(f"\nKruskal-Wallis: H={kw_H:.4f}, p={kw_p:.4f}, epsilon2={eps_sq:.4f}")
 
-# Pairwise Mann-Whitney with Bonferroni
-pairs = [(0, 1), (0, 2), (1, 2)]
-n_pairs = len(pairs)
+pairs_mw = [(g0, g1, "0 vs 1"), (g0, g2, "0 vs 2"), (g1, g2, "1 vs 2")]
+n_comp = 3
 print("\nPairwise Mann-Whitney U (Bonferroni corrected):")
-for g1, g2 in pairs:
-    a, b = groups_kw[g1], groups_kw[g2]
-    U, p = stats.mannwhitneyu(a, b, alternative='two-sided')
-    p_adj = min(p * n_pairs, 1.0)
-    n1, n2 = len(a), len(b)
-    rb = 1 - 2*U / (n1 * n2)
-    print(f"  Q24={g1} vs Q24={g2}: U={U:.1f}, p={p:.4f}, p_adj={p_adj:.4f}, r_b={rb:.3f}")
+for ga, gb, label in pairs_mw:
+    U_mw, p_raw = sp_stats.mannwhitneyu(ga, gb, alternative="two-sided")
+    p_bonf = min(p_raw * n_comp, 1.0)
+    r_rb   = 1 - (2 * U_mw) / (len(ga) * len(gb))
+    print(f"  {label}: U={U_mw:.1f}, p_raw={p_raw:.4f}, p_Bonf={p_bonf:.4f}, r_rb={r_rb:.3f}")
 
-# Correlations
-print("\nSpearman and Kendall correlations with Satisfaction:")
-for var in ['q24', 'info_score', 'consult_score']:
-    tmp = df_full[[var, 'satisfaction']].dropna()
-    rho, p_rho = stats.spearmanr(tmp[var], tmp['satisfaction'])
-    tau, p_tau = stats.kendalltau(tmp[var], tmp['satisfaction'])
-    print(f"  {var}: Spearman rho={rho:.3f} (p={p_rho:.4f}), Kendall tau={tau:.3f} (p={p_tau:.4f})")
+pairs_corr = [
+    ("q24",           "q25", "Q24 <-> Q25"),
+    ("info_score",    "q25", "info_score <-> Q25"),
+    ("consult_score", "q25", "consult_score <-> Q25"),
+]
+print("\nSpearman rho and Kendall tau:")
+for va, vb, label in pairs_corr:
+    sub = df_full[[va, vb]].dropna()
+    rho, p_rho = sp_stats.spearmanr(sub[va], sub[vb])
+    tau, p_tau = sp_stats.kendalltau(sub[va], sub[vb])
+    print(f"  {label}: rho={rho:.3f} (p={p_rho:.4f}), tau={tau:.3f} (p={p_tau:.4f})")
 
-# Jonckheere-Terpstra (manual)
-def jonckheere_terpstra(groups_list):
-    k = len(groups_list)
-    J = 0
+def jonckheere_terpstra(groups):
+    k  = len(groups)
+    J  = 0.0
     for i in range(k - 1):
         for j in range(i + 1, k):
-            U_ij, _ = stats.mannwhitneyu(groups_list[i], groups_list[j], alternative='less')
-            J += U_ij
-    n = [len(g) for g in groups_list]
-    N = sum(n)
-    mu_J = (N**2 - sum(ni**2 for ni in n)) / 4
-    var_J = (N**2 * (2*N + 3) - sum(ni**2 * (2*ni + 3) for ni in n)) / 72
-    z_J = (J - mu_J) / np.sqrt(var_J)
-    p_J = 1 - stats.norm.cdf(z_J)
-    return J, z_J, p_J
+            for xi in groups[i]:
+                for xj in groups[j]:
+                    if xi < xj:
+                        J += 1.0
+                    elif xi == xj:
+                        J += 0.5
+    ns   = np.array([len(g) for g in groups])
+    N    = ns.sum()
+    EJ   = (N ** 2 - np.sum(ns ** 2)) / 4.0
+    VarJ = (N ** 2 * (2 * N + 3) - np.sum(ns ** 2 * (2 * ns + 3))) / 72.0
+    z    = (J - EJ) / np.sqrt(VarJ)
+    p    = 1.0 - sp_stats.norm.cdf(z)
+    return J, EJ, VarJ, z, p
 
-J_stat, z_J, p_J = jonckheere_terpstra(groups_kw)
-print(f"\nJonckheere-Terpstra trend test:")
-print(f"  J={J_stat:.1f}, Z={z_J:.3f}, p={p_J:.4f}")
-print(f"  -> {'Significant' if p_J < 0.05 else 'Non-significant'} ordered trend")
+J_jt, EJ_jt, VarJ_jt, z_jt, p_jt = jonckheere_terpstra(gdata)
+print(f"\nJonckheere-Terpstra: J={J_jt:.1f}, E[J]={EJ_jt:.1f}, z={z_jt:.3f}, p(one-tail)={p_jt:.4f}")
 
-# ============================================================
-# SECTION 4: ORDINAL LOGISTIC REGRESSION
-# ============================================================
-print("\n" + "=" * 60)
+# ==============================================================================
+# SECTION 4 - ORDINAL LOGISTIC REGRESSION
+# ==============================================================================
+print("\n" + "=" * 70)
 print("SECTION 4: ORDINAL LOGISTIC REGRESSION")
-print("=" * 60)
+print("=" * 70)
 
+from statsmodels.miscmodels.ordinal_model import OrderedModel
+
+ord_df = df_full[["q22", "info_score", "consult_score", "q24", "q25"]].dropna().copy()
+ord_df["sat_cat"] = pd.Categorical(
+    ord_df["q25"].astype(int), categories=[1, 2, 3, 4, 5], ordered=True
+)
+
+def pseudo_r2_mcfadden(model_result, endog):
+    ll_full = model_result.llf
+    try:
+        null_mod = OrderedModel(endog, np.ones((len(endog), 1)), distr="logit")
+        null_res = null_mod.fit(method="bfgs", disp=False)
+        ll_null  = null_res.llf
+    except Exception:
+        return np.nan
+    if ll_null and not np.isnan(ll_null) and ll_null != 0:
+        return 1 - ll_full / ll_null
+    return np.nan
+
+print("\nModel 1: q24 -> satisfaction")
+res1 = None
 try:
-    from statsmodels.miscmodels.ordinal_model import OrderedModel
-
-    d4 = df_full[['q24', 'q22', 'info_score', 'consult_score', 'satisfaction']].dropna().reset_index(drop=True)
-    d4['satisfaction_cat'] = d4['satisfaction'].astype(int).astype(str)
-
-    print("\nModel 1: q24 -> satisfaction")
-    mod1 = OrderedModel(d4['satisfaction_cat'], d4[['q24']], distr='logit')
-    res1 = mod1.fit(method='bfgs', disp=False)
+    mod1 = OrderedModel(ord_df["sat_cat"], ord_df[["q24"]], distr="logit")
+    res1 = mod1.fit(method="bfgs", disp=False)
     print(res1.summary())
-    pseudo_r2_1 = 1 - res1.llf / res1.llnull
-    print(f"  Pseudo-R2: {pseudo_r2_1:.4f}")
-
-    print("\nModel 2: q22 + info_score + consult_score -> satisfaction")
-    mod2 = OrderedModel(d4['satisfaction_cat'], d4[['q22', 'info_score', 'consult_score']], distr='logit')
-    res2 = mod2.fit(method='bfgs', disp=False)
-    print(res2.summary())
-    pseudo_r2_2 = 1 - res2.llf / res2.llnull
-    print(f"  Pseudo-R2: {pseudo_r2_2:.4f}")
-
+    print(f"McFadden pseudo-R2: {pseudo_r2_mcfadden(res1, ord_df['sat_cat']):.4f}")
 except Exception as e:
-    print(f"  Ordinal model error: {e}")
-    pseudo_r2_1 = pseudo_r2_2 = np.nan
-    res1 = res2 = None
+    print(f"  Model 1 failed: {e}")
 
-# ============================================================
-# SECTION 5: PLS-SEM PATH MODEL
-# ============================================================
-print("\n" + "=" * 60)
-print("SECTION 5: PLS-SEM PATH MODEL")
-print("=" * 60)
+print("\nModel 2: q22 + info_score + consult_score -> satisfaction")
+res2 = None
+try:
+    mod2 = OrderedModel(ord_df["sat_cat"], ord_df[["q22", "info_score", "consult_score"]], distr="logit")
+    res2 = mod2.fit(method="bfgs", disp=False)
+    print(res2.summary())
+    print(f"McFadden pseudo-R2: {pseudo_r2_mcfadden(res2, ord_df['sat_cat']):.4f}")
+except Exception as e:
+    print(f"  Model 2 failed: {e}")
 
-d5 = df_full[['q22', 'info_score', 'consult_score', 'satisfaction']].dropna().reset_index(drop=True)
+# ==============================================================================
+# SECTION 5 - PLS-SEM
+# ==============================================================================
+print("\n" + "=" * 70)
+print("SECTION 5: PLS-SEM")
+print("=" * 70)
 
-def standardize(x):
-    return (x - x.mean()) / (x.std() + 1e-15)
+pls_df = df_full[["q22", "info_score", "consult_score", "q25"]].dropna().copy()
 
-X_pls = d5[['q22', 'info_score', 'consult_score']].values
-Y_pls = d5['satisfaction'].values
+def zscore(s):
+    return (s - s.mean()) / (s.std() + 1e-12)
 
-X_std = np.column_stack([standardize(X_pls[:, i]) for i in range(X_pls.shape[1])])
-Y_std = standardize(Y_pls)
+pls_df["q22_z"]  = zscore(pls_df["q22"])
+pls_df["info_z"] = zscore(pls_df["info_score"])
+pls_df["cons_z"] = zscore(pls_df["consult_score"])
+pls_df["sat_z"]  = zscore(pls_df["q25"])
 
-# Mode-A outer weights (power method)
-w = np.ones(X_std.shape[1]) / np.sqrt(X_std.shape[1])
-for _ in range(100):
-    score = X_std @ w
-    score = (score - score.mean()) / (score.std() + 1e-15)
-    w_new = X_std.T @ score / len(score)
-    w_new /= (np.linalg.norm(w_new) + 1e-15)
-    if np.allclose(w, w_new, atol=1e-6):
-        break
-    w = w_new
+indicators = pls_df[["q22_z", "info_z", "cons_z"]].values
+sat_z      = pls_df["sat_z"].values
+n_pls      = len(pls_df)
 
-participation_lv = X_std @ w
-participation_lv = (participation_lv - participation_lv.mean()) / (participation_lv.std() + 1e-15)
-
-# Inner model
-Xin = np.column_stack([np.ones(len(participation_lv)), participation_lv])
-beta_inner = np.linalg.lstsq(Xin, Y_std, rcond=None)[0]
-y_pred_inner = Xin @ beta_inner
-resid = Y_std - y_pred_inner
-ss_res = (resid**2).sum()
-ss_tot = ((Y_std - Y_std.mean())**2).sum()
-R2_pls = 1 - ss_res / ss_tot
-print(f"\nPLS-SEM inner path: beta={beta_inner[1]:.3f}, R2={R2_pls:.3f}")
-print(f"Outer weights: q22={w[0]:.3f}, info_score={w[1]:.3f}, consult_score={w[2]:.3f}")
-
-# Bootstrap CI (500 resamples)
-np.random.seed(42)
-boot_betas = []
-n5 = len(d5)
+weights = np.ones(3) / 3.0
 for _ in range(500):
-    idx = np.random.choice(n5, n5, replace=True)
-    Xb = X_std[idx]
-    Yb = Y_std[idx]
-    wb = np.ones(Xb.shape[1]) / np.sqrt(Xb.shape[1])
-    for __ in range(100):
-        sb = Xb @ wb
-        sb = (sb - sb.mean()) / (sb.std() + 1e-15)
-        wb_new = Xb.T @ sb / len(sb)
-        wb_new /= (np.linalg.norm(wb_new) + 1e-15)
-        if np.allclose(wb, wb_new, atol=1e-6):
+    score       = indicators @ weights
+    score       = score / (score.std() + 1e-12)
+    inner_proxy = sat_z * np.corrcoef(score, sat_z)[0, 1]
+    new_w       = indicators.T @ inner_proxy / n_pls
+    new_w       = new_w / (np.linalg.norm(new_w) + 1e-12)
+    if np.max(np.abs(new_w - weights)) < 1e-8:
+        break
+    weights = new_w
+
+participation_score = indicators @ weights
+participation_score = (participation_score - participation_score.mean()) / (
+    participation_score.std() + 1e-12)
+
+X_inner = np.column_stack([np.ones(n_pls), participation_score])
+beta_inner, _, _, _ = np_lstsq(X_inner, sat_z, rcond=None)
+y_pred_inner = X_inner @ beta_inner
+r2_inner  = 1.0 - np.var(sat_z - y_pred_inner) / (np.var(sat_z) + 1e-12)
+path_coef = beta_inner[1]
+
+print(f"\nOuter weights: q22={weights[0]:.3f}, info={weights[1]:.3f}, consult={weights[2]:.3f}")
+print(f"Path coefficient (PARTICIPATION -> SATISFACTION): {path_coef:.3f}")
+print(f"R2 (inner model): {r2_inner:.3f}")
+
+rng_boot   = np.random.default_rng(42)
+boot_paths = []
+for _ in range(500):
+    idx   = rng_boot.integers(0, n_pls, n_pls)
+    ind_b = indicators[idx]
+    sat_b = sat_z[idx]
+    w_b   = np.ones(3) / 3.0
+    for __ in range(200):
+        sc_b = ind_b @ w_b
+        sc_b = sc_b / (sc_b.std() + 1e-12)
+        cor  = np.corrcoef(sc_b, sat_b)[0, 1] if len(sat_b) > 1 else 0.0
+        nw_b = ind_b.T @ (sat_b * cor) / len(idx)
+        nol  = np.linalg.norm(nw_b)
+        if nol < 1e-12:
             break
-        wb = wb_new
-    lv_b = Xb @ wb
-    lv_b = (lv_b - lv_b.mean()) / (lv_b.std() + 1e-15)
-    Xin_b = np.column_stack([np.ones(len(lv_b)), lv_b])
-    Yb_pred = np.linalg.lstsq(Xin_b, Yb, rcond=None)[0]
-    boot_betas.append(Yb_pred[1])
+        nw_b = nw_b / nol
+        if np.max(np.abs(nw_b - w_b)) < 1e-6:
+            break
+        w_b = nw_b
+    sc_b = ind_b @ w_b
+    sc_b = (sc_b - sc_b.mean()) / (sc_b.std() + 1e-12)
+    Xi   = np.column_stack([np.ones(len(idx)), sc_b])
+    bi, _, _, _ = np_lstsq(Xi, sat_b, rcond=None)
+    boot_paths.append(bi[1])
 
-boot_betas = np.array(boot_betas)
-ci_low, ci_high = np.percentile(boot_betas, [2.5, 97.5])
-print(f"Bootstrap 95% CI for path coefficient: [{ci_low:.3f}, {ci_high:.3f}]")
+boot_paths = np.array(boot_paths)
+ci_lo, ci_hi = np.percentile(boot_paths, [2.5, 97.5])
+print(f"Bootstrap 95% CI: [{ci_lo:.3f}, {ci_hi:.3f}]")
 
-# Q2 (blindfolding, d=7)
 d_blind = 7
-q2_ss_res, q2_ss_tot = 0, 0
+sse_bf, sso_bf = 0.0, 0.0
 for start in range(d_blind):
-    idx_out = list(range(start, n5, d_blind))
-    idx_in  = [i for i in range(n5) if i not in idx_out]
-    X_in_, Y_in_ = X_std[idx_in], Y_std[idx_in]
-    X_out_, Y_out_ = X_std[idx_out], Y_std[idx_out]
-    wb = np.ones(X_in_.shape[1]) / np.sqrt(X_in_.shape[1])
-    for __ in range(100):
-        sb = X_in_ @ wb
-        sb = (sb - sb.mean()) / (sb.std() + 1e-15)
-        wb_new = X_in_.T @ sb / len(sb)
-        wb_new /= (np.linalg.norm(wb_new) + 1e-15)
-        if np.allclose(wb, wb_new, atol=1e-6):
+    omit_idx = list(range(start, n_pls, d_blind))
+    keep_idx = [i for i in range(n_pls) if i not in omit_idx]
+    if len(keep_idx) < 3:
+        continue
+    ind_k = indicators[keep_idx]
+    sat_k = sat_z[keep_idx]
+    w_k   = np.ones(3) / 3.0
+    for __ in range(200):
+        sc_k = ind_k @ w_k
+        sc_k = sc_k / (sc_k.std() + 1e-12)
+        cor_k = np.corrcoef(sc_k, sat_k)[0, 1] if len(sat_k) > 1 else 0.0
+        nw_k  = ind_k.T @ (sat_k * cor_k) / len(keep_idx)
+        nol_k = np.linalg.norm(nw_k)
+        if nol_k < 1e-12:
             break
-        wb = wb_new
-    lv_in = X_in_ @ wb
-    lv_in = (lv_in - lv_in.mean()) / (lv_in.std() + 1e-15)
-    Xin_in = np.column_stack([np.ones(len(lv_in)), lv_in])
-    beta_in = np.linalg.lstsq(Xin_in, Y_in_, rcond=None)[0]
-    lv_out = X_out_ @ wb
-    mean_lv_in = (X_in_ @ wb).mean()
-    std_lv_in  = (X_in_ @ wb).std() + 1e-15
-    lv_out = (lv_out - mean_lv_in) / std_lv_in
-    y_hat_out = beta_in[0] + beta_in[1] * lv_out
-    q2_ss_res += ((Y_out_ - y_hat_out)**2).sum()
-    q2_ss_tot += ((Y_out_ - Y_std.mean())**2).sum()
+        nw_k = nw_k / nol_k
+        if np.max(np.abs(nw_k - w_k)) < 1e-6:
+            break
+        w_k = nw_k
+    sc_ko = indicators[keep_idx] @ w_k
+    mu_ko = sc_ko.mean(); sd_ko = sc_ko.std() + 1e-12
+    sc_ko = (sc_ko - mu_ko) / sd_ko
+    Xi_k  = np.column_stack([np.ones(len(keep_idx)), sc_ko])
+    bi_k, _, _, _ = np_lstsq(Xi_k, sat_k, rcond=None)
+    sc_o  = (indicators[omit_idx] @ w_k - mu_ko) / sd_ko
+    pred_o = np.column_stack([np.ones(len(omit_idx)), sc_o]) @ bi_k
+    sse_bf += np.sum((sat_z[omit_idx] - pred_o) ** 2)
+    sso_bf += np.sum(sat_z[omit_idx] ** 2)
 
-Q2_pls = 1 - q2_ss_res / q2_ss_tot
-f2_pls = R2_pls / (1 - R2_pls + 1e-15)
-print(f"Q2 = {Q2_pls:.3f}, f2 = {f2_pls:.3f}")
+q2_blind = 1.0 - sse_bf / (sso_bf + 1e-12)
+f2_pls   = r2_inner / (1.0 - r2_inner + 1e-12)
+print(f"Q2 (blindfolding d=7): {q2_blind:.3f}")
+print(f"f2: {f2_pls:.3f}")
 
-# ============================================================
-# SECTION 6: EXPECTATION GAP THEORY
-# ============================================================
-print("\n" + "=" * 60)
-print("SECTION 6: EXPECTATION GAP THEORY ASSESSMENT")
-print("=" * 60)
+# ==============================================================================
+# SECTION 6 - EXPECTATION GAP THEORY
+# ==============================================================================
+print("\n" + "=" * 70)
+print("SECTION 6: EXPECTATION GAP THEORY")
+print("=" * 70)
 
-g0 = df_full[df_full['q24'] == 0]['satisfaction'].dropna().values
-g1 = df_full[df_full['q24'] == 1]['satisfaction'].dropna().values
-g2 = df_full[df_full['q24'] == 2]['satisfaction'].dropna().values
+eg_df = df_sat[["q24", "q25"]].dropna().copy()
+eg_df["predicted_higher"] = eg_df["q24"] > 0
+eg_df["sat_above_median"] = eg_df["q25"] > eg_df["q25"].median()
 
-print(f"\nMean satisfaction by Q24:")
-print(f"  Q24=0 (None):    M={g0.mean():.3f}, n={len(g0)}")
-print(f"  Q24=1 (Info):    M={g1.mean():.3f}, n={len(g1)}")
-print(f"  Q24=2 (Consult): M={g2.mean():.3f}, n={len(g2)}")
+table_eg = pd.crosstab(
+    eg_df["predicted_higher"].map({True: "Participates", False: "No participation"}),
+    eg_df["sat_above_median"].map({True: "Sat>median", False: "Sat<=median"}),
+    margins=True,
+)
+print("\nExpected vs Observed satisfaction direction:")
+print(table_eg)
 
-if len(g2) > 0 and len(g0) > 0:
-    U_20, p_20 = stats.mannwhitneyu(g2, g0, alternative='less')
-    print(f"\nOne-tailed MW (Q24=2 < Q24=0): U={U_20:.1f}, p={p_20:.4f}")
-if len(g2) > 0 and len(g1) > 0:
-    U_21, p_21 = stats.mannwhitneyu(g2, g1, alternative='less')
-    print(f"One-tailed MW (Q24=2 < Q24=1): U={U_21:.1f}, p={p_21:.4f}")
+gr_consulted = eg_df[eg_df["q24"] == 2]["q25"]
+gr_other     = eg_df[eg_df["q24"] <= 1]["q25"]
+U_eg, p_eg   = sp_stats.mannwhitneyu(gr_consulted, gr_other, alternative="greater")
+print(f"\nOne-tailed Mann-Whitney (Q24=2 > Q24<=1): U={U_eg:.1f}, p={p_eg:.4f}")
 
-# Levene's test
-all_groups = [g for g in [g0, g1, g2] if len(g) > 1]
-lev_stat, lev_p = stats.levene(*all_groups)
-print(f"\nLevene's test: W={lev_stat:.3f}, p={lev_p:.4f}")
+lev_stat, lev_p = sp_stats.levene(
+    eg_df[eg_df["q24"] == 0]["q25"].dropna(),
+    eg_df[eg_df["q24"] == 1]["q25"].dropna(),
+    eg_df[eg_df["q24"] == 2]["q25"].dropna(),
+)
+print(f"Levene's test: F={lev_stat:.3f}, p={lev_p:.4f}")
 
-# Cohen's d between Q24=0 and Q24=2
-if len(g0) > 1 and len(g2) > 1:
-    pooled_sd = np.sqrt(((len(g0)-1)*g0.std()**2 + (len(g2)-1)*g2.std()**2) / (len(g0)+len(g2)-2))
-    cohens_d = (g0.mean() - g2.mean()) / (pooled_sd + 1e-15)
-    print(f"Cohen's d (Q24=0 vs Q24=2): d={cohens_d:.3f}")
+g_q24_0 = eg_df[eg_df["q24"] == 0]["q25"].dropna().values
+g_q24_2 = eg_df[eg_df["q24"] == 2]["q25"].dropna().values
 
-# Verdict
-gap_confirmed = False
-gap_partial   = False
-if len(g2) > 0 and len(g0) > 0:
-    if g2.mean() < g0.mean():
-        gap_partial = True
-        if p_20 < 0.05:
-            gap_confirmed = True
+def cohens_d(a, b):
+    na, nb    = len(a), len(b)
+    pooled_sd = np.sqrt(
+        ((na - 1) * np.var(a, ddof=1) + (nb - 1) * np.var(b, ddof=1)) / (na + nb - 2)
+    )
+    return (np.mean(b) - np.mean(a)) / (pooled_sd + 1e-12)
 
-if gap_confirmed:
-    verdict = "CONFIRMED: Higher participation associated with lower satisfaction (expectation gap)"
-elif gap_partial:
-    verdict = "PARTIALLY CONFIRMED: Direction matches but not statistically significant"
-else:
-    verdict = "DISCONFIRMED: Higher participation not associated with lower satisfaction"
-print(f"\nExpectation Gap Verdict: {verdict}")
+d_coh   = cohens_d(g_q24_0, g_q24_2)
+verdict = "SUPPORTED" if p_eg < 0.05 and d_coh > 0.2 else "NOT SUPPORTED"
+print(f"Cohen\'s d (Q24=2 vs Q24=0): {d_coh:.3f}")
+print(f"\nExpectation Gap Theory verdict: {verdict}")
 
-# ============================================================
-# SECTION 7: XGBOOST + SHAP
-# ============================================================
-print("\n" + "=" * 60)
+# ==============================================================================
+# SECTION 7 - XGBOOST + SHAP
+# ==============================================================================
+print("\n" + "=" * 70)
 print("SECTION 7: XGBOOST + SHAP")
-print("=" * 60)
+print("=" * 70)
+
+shap_available      = False
+shap_vals_for_panel = None
+X_xgb_for_panel     = None
+feat_cols_for_panel = None
+cv_r2_mean          = np.nan
+cv_rmse_mean        = np.nan
 
 try:
     import xgboost as xgb
-    from sklearn.model_selection import cross_val_score, KFold
-    from sklearn.metrics import mean_squared_error
-    from sklearn.preprocessing import MinMaxScaler
+    import shap
+    from sklearn.model_selection import KFold
+    from sklearn.metrics import r2_score, mean_squared_error
 
-    d7 = df_full[['q22', 'info_score', 'consult_score', 'q24', 'satisfaction']].dropna().reset_index(drop=True)
+    feat_df = df_full[["q22", "info_score", "consult_score", "q24", "q25"]].dropna().copy()
 
-    scaler = MinMaxScaler()
-    d7_norm = pd.DataFrame(scaler.fit_transform(d7[['q22', 'q24', 'info_score', 'consult_score']]),
-                           columns=['q22_n', 'q24_n', 'info_n', 'cons_n'])
-    d7['participation_composite'] = (0.35 * d7_norm['q22_n'] +
-                                     0.20 * d7_norm['q24_n'] +
-                                     0.45 * (d7_norm['info_n'] + d7_norm['cons_n']))
+    def normalise(s):
+        mn, mx = s.min(), s.max()
+        return (s - mn) / (mx - mn + 1e-12)
 
-    features = ['q22', 'info_score', 'consult_score', 'q24', 'participation_composite']
-    X7 = d7[features].values
-    y7 = d7['satisfaction'].values
+    feat_df["participation_composite"] = (
+        0.35 * normalise(feat_df["q22"])
+        + 0.20 * normalise(feat_df["q24"])
+        + 0.45 * normalise(feat_df["info_score"] + feat_df["consult_score"])
+    )
 
-    xgb_model = xgb.XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1,
-                                   random_state=42, verbosity=0)
+    feature_cols = ["q22", "info_score", "consult_score", "q24", "participation_composite"]
+    X_xgb        = feat_df[feature_cols].values
+    y_xgb        = feat_df["q25"].values
+
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    cv_r2   = cross_val_score(xgb_model, X7, y7, cv=kf, scoring='r2')
-    cv_rmse = np.sqrt(-cross_val_score(xgb_model, X7, y7, cv=kf, scoring='neg_mean_squared_error'))
-    print(f"\nXGBoost 5-fold CV: R2={cv_r2.mean():.3f}+-{cv_r2.std():.3f}, RMSE={cv_rmse.mean():.3f}+-{cv_rmse.std():.3f}")
+    cv_r2_list, cv_rmse_list = [], []
+    for train_idx, test_idx in kf.split(X_xgb):
+        m = xgb.XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1,
+                              random_state=42, verbosity=0)
+        m.fit(X_xgb[train_idx], y_xgb[train_idx])
+        pred = m.predict(X_xgb[test_idx])
+        cv_r2_list.append(r2_score(y_xgb[test_idx], pred))
+        cv_rmse_list.append(np.sqrt(mean_squared_error(y_xgb[test_idx], pred)))
 
-    xgb_model.fit(X7, y7)
+    cv_r2_mean   = np.mean(cv_r2_list)
+    cv_rmse_mean = np.mean(cv_rmse_list)
+    print(f"\nXGBoost 5-fold CV: R2={cv_r2_mean:.3f}+/-{np.std(cv_r2_list):.3f}, "
+          f"RMSE={cv_rmse_mean:.3f}+/-{np.std(cv_rmse_list):.3f}")
+
+    model_full  = xgb.XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1,
+                                    random_state=42, verbosity=0)
+    model_full.fit(X_xgb, y_xgb)
+    explainer   = shap.TreeExplainer(model_full)
+    shap_values = explainer.shap_values(X_xgb)
+
+    shap_available      = True
+    shap_vals_for_panel = shap_values
+    X_xgb_for_panel     = X_xgb
+    feat_cols_for_panel = feature_cols
 
     try:
-        import shap
-        explainer = shap.TreeExplainer(xgb_model)
-        shap_values = explainer.shap_values(X7)
+        shap.summary_plot(shap_values, X_xgb, feature_names=feature_cols,
+                          show=False, plot_type="dot")
+        plt.tight_layout()
+        plt.savefig(os.path.join(RESULTS, "shap_beeswarm.png"), dpi=150, bbox_inches="tight")
+        plt.close("all")
+        print("SHAP beeswarm saved.")
+    except Exception as e_bs:
+        print(f"SHAP beeswarm failed: {e_bs}")
 
+    try:
+        fig_dep, ax_dep = plt.subplots(figsize=(6, 4))
+        shap.dependence_plot(3, shap_values, X_xgb, feature_names=feature_cols,
+                             ax=ax_dep, show=False)
+        fig_dep.tight_layout()
+        fig_dep.savefig(os.path.join(RESULTS, "shap_dependence_q24.png"), dpi=150)
+        plt.close(fig_dep)
+        print("SHAP dependence plot saved.")
+    except Exception as e_dep:
+        print(f"SHAP dependence plot failed: {e_dep}")
+
+    preds_full = model_full.predict(X_xgb)
+    for label, idx in [("best", int(np.argmax(preds_full))),
+                        ("worst", int(np.argmin(preds_full)))]:
         try:
-            fig_shap, ax_shap = plt.subplots(figsize=(8, 6))
-            feature_importance = np.abs(shap_values).mean(axis=0)
-            sorted_idx = np.argsort(feature_importance)
-            ax_shap.barh(np.array(features)[sorted_idx], feature_importance[sorted_idx], color='steelblue')
-            ax_shap.set_xlabel('Mean |SHAP value|')
-            ax_shap.set_title('SHAP Feature Importance')
+            shap.waterfall_plot(
+                shap.Explanation(
+                    values=shap_values[idx],
+                    base_values=explainer.expected_value,
+                    data=X_xgb[idx],
+                    feature_names=feature_cols,
+                ),
+                show=False,
+            )
             plt.tight_layout()
-            plt.savefig(os.path.join(RESULTS_DIR, 'section7_shap_importance.png'), dpi=150, bbox_inches='tight')
-            plt.close()
-            print("Saved: section7_shap_importance.png")
-        except Exception as e:
-            print(f"  SHAP beeswarm save error: {e}")
+            plt.savefig(os.path.join(RESULTS, f"shap_waterfall_{label}.png"),
+                        dpi=150, bbox_inches="tight")
+            plt.close("all")
+            print(f"SHAP waterfall ({label}) saved.")
+        except Exception as ew:
+            print(f"SHAP waterfall {label} failed: {ew}")
 
-        try:
-            q24_idx = features.index('q24')
-            fig_dep, ax_dep = plt.subplots(figsize=(7, 5))
-            ax_dep.scatter(X7[:, q24_idx], shap_values[:, q24_idx], alpha=0.6, c='teal')
-            ax_dep.set_xlabel('q24'); ax_dep.set_ylabel('SHAP value')
-            ax_dep.set_title('SHAP Dependence: q24')
-            plt.tight_layout()
-            plt.savefig(os.path.join(RESULTS_DIR, 'section7_shap_dependence_q24.png'), dpi=150, bbox_inches='tight')
-            plt.close()
-            print("Saved: section7_shap_dependence_q24.png")
-        except Exception as e:
-            print(f"  SHAP dependence save error: {e}")
+except ImportError as ie:
+    print(f"xgboost or shap not installed - skipping Section 7. ({ie})")
 
-    except ImportError:
-        print("  SHAP not available, skipping SHAP analysis")
+# ==============================================================================
+# SECTION 8 - COMPREHENSIVE 3x3 PANEL FIGURE (18x15 inches)
+# ==============================================================================
+print("\n" + "=" * 70)
+print("SECTION 8: COMPREHENSIVE 3x3 PANEL FIGURE")
+print("=" * 70)
 
-except ImportError:
-    print("  XGBoost not available, skipping section 7")
-    features = ['q22', 'info_score', 'consult_score', 'q24', 'participation_composite']
-    d7 = df_full.copy()
-    d7['participation_composite'] = np.nan
-    xgb_model = None
-    cv_r2 = np.array([np.nan])
-    cv_rmse = np.array([np.nan])
+fig_panel, axes = plt.subplots(3, 3, figsize=(18, 15))
+fig_panel.subplots_adjust(hspace=0.45, wspace=0.38)
 
-# ============================================================
-# SECTION 8: COMPREHENSIVE RESULTS FIGURE
-# ============================================================
-print("\n" + "=" * 60)
-print("SECTION 8: COMPREHENSIVE RESULTS FIGURE")
-print("=" * 60)
+def add_bracket(ax, x1, x2, y, p_val, delta=0.05):
+    ax.plot([x1, x1, x2, x2], [y, y + delta, y + delta, y], lw=1.2, c="k")
+    stars = ("***" if p_val < 0.001 else "**" if p_val < 0.01 else
+             "*" if p_val < 0.05 else "ns")
+    ax.text((x1 + x2) / 2, y + delta + 0.01, stars, ha="center", va="bottom", fontsize=9)
 
-fig8, axes8 = plt.subplots(3, 3, figsize=(18, 15))
-fig8.suptitle('Participation-Satisfaction Study: Comprehensive Results', fontsize=14, fontweight='bold')
-
-# (A) Boxplot satisfaction by Q24 group
-ax = axes8[0, 0]
-bp = ax.boxplot([g0, g1, g2],
-                patch_artist=True, notch=False)
-colors = ['#4C72B0', '#DD8452', '#55A868']
-for patch, color in zip(bp['boxes'], colors):
-    patch.set_facecolor(color)
-ax.set_ylabel('Satisfaction (Q25)')
-ax.set_title('(A) Satisfaction by Q24 Group')
-# Significance brackets
-y_max = max(np.concatenate([g0, g1, g2])) if len(g0) and len(g1) and len(g2) else 5
-h = 0.2
-pairs_sig = [(1, 2, p_kw)]
-for x1, x2, pv in [(1, 3, p_kw)]:
-    y = y_max + h
-    ax.plot([x1, x1, x2, x2], [y, y+h*0.5, y+h*0.5, y], 'k-', lw=1)
-    sig_str = '***' if pv < 0.001 else '**' if pv < 0.01 else '*' if pv < 0.05 else 'ns'
-    ax.text((x1+x2)/2, y+h*0.5, sig_str, ha='center', va='bottom', fontsize=10)
-
-# (B) Bar chart mean+-SE
-ax = axes8[0, 1]
-means = [g0.mean() if len(g0) else 0, g1.mean() if len(g1) else 0, g2.mean() if len(g2) else 0]
-sems  = [g0.std()/np.sqrt(len(g0)) if len(g0) else 0,
-         g1.std()/np.sqrt(len(g1)) if len(g1) else 0,
-         g2.std()/np.sqrt(len(g2)) if len(g2) else 0]
-ax.bar([0, 1, 2], means, yerr=sems, capsize=5, color=colors, edgecolor='black')
-ax.set_xticks([0, 1, 2]); ax.set_xticklabels(['Q24=0', 'Q24=1', 'Q24=2'])
-ax.set_ylabel('Mean Satisfaction'); ax.set_title('(B) Mean+-SE Satisfaction by Group')
-ax.set_ylim(0, 6)
-
-# (C) Scatter Q24 vs satisfaction with jitter
-ax = axes8[0, 2]
-x_jit = df_full['q24'] + np.random.uniform(-0.1, 0.1, len(df_full))
-ax.scatter(x_jit, df_full['satisfaction'], alpha=0.4, color='steelblue', s=30)
-z = np.polyfit(df_full['q24'].dropna(), df_full['satisfaction'].dropna(), 1)
-p_trend = np.poly1d(z)
-xline = np.linspace(-0.1, 2.1, 100)
-ax.plot(xline, p_trend(xline), 'r-', lw=2, label=f'Trend (slope={z[0]:.2f})')
-ax.set_xlabel('Q24 (with jitter)'); ax.set_ylabel('Satisfaction')
-ax.set_title('(C) Q24 vs Satisfaction'); ax.legend()
-
-# (D) PLS-SEM path diagram
-ax = axes8[1, 0]
-ax.set_xlim(0, 10); ax.set_ylim(0, 10); ax.axis('off')
-ax.set_title('(D) PLS-SEM Path Diagram')
-# Boxes
-def draw_box(ax, x, y, bw, bh, text, color='lightblue'):
-    rect = mpatches.FancyBboxPatch((x-bw/2, y-bh/2), bw, bh,
-                                    boxstyle='round,pad=0.1', facecolor=color, edgecolor='navy', lw=1.5)
+def draw_box(ax, x, y, w, h, text, color="#AED6F1"):
+    rect = mpatches.FancyBboxPatch(
+        (x - w / 2, y - h / 2), w, h,
+        boxstyle="round,pad=0.15", facecolor=color, edgecolor="navy", lw=1.5,
+    )
     ax.add_patch(rect)
-    ax.text(x, y, text, ha='center', va='center', fontsize=8, fontweight='bold')
+    ax.text(x, y, text, ha="center", va="center", fontsize=8, fontweight="bold")
 
-draw_box(ax, 2, 7, 2.5, 0.8, 'q22', 'lightyellow')
-draw_box(ax, 2, 5, 2.5, 0.8, 'info_score', 'lightyellow')
-draw_box(ax, 2, 3, 2.5, 0.8, 'consult_score', 'lightyellow')
-draw_box(ax, 5, 5, 2.5, 1.2, 'PARTICIPATION\n(Latent)', 'lightblue')
-draw_box(ax, 8.5, 5, 2.5, 1.2, 'SATISFACTION\n(Latent)', 'lightgreen')
-# Arrows
-for y_ind, wt in zip([7, 5, 3], w):
-    ax.annotate('', xy=(3.75, 5), xytext=(3.25, y_ind),
-                arrowprops=dict(arrowstyle='->', color='navy'))
-    ax.text(3.5, (5+y_ind)/2, f'w={wt:.2f}', fontsize=7, color='navy')
-ax.annotate('', xy=(7.25, 5), xytext=(6.25, 5),
-            arrowprops=dict(arrowstyle='->', color='darkred', lw=2))
-ax.text(6.75, 5.3, f'beta={beta_inner[1]:.2f}', fontsize=9, color='darkred', fontweight='bold')
-ax.text(6.75, 4.6, f'R2={R2_pls:.2f}', fontsize=8, color='gray')
+def draw_arrow(ax, x1, y1, x2, y2, label=""):
+    ax.annotate("", xy=(x2, y2), xytext=(x1, y1),
+                arrowprops=dict(arrowstyle="->", color="navy", lw=1.5))
+    if label:
+        ax.text((x1 + x2) / 2, (y1 + y2) / 2 + 0.15,
+                label, ha="center", fontsize=7.5, color="darkred")
 
-# (E) SHAP summary or placeholder
-ax = axes8[1, 1]
-try:
-    shap_img_path = os.path.join(RESULTS_DIR, 'section7_shap_importance.png')
-    if os.path.exists(shap_img_path):
-        img = plt.imread(shap_img_path)
-        ax.imshow(img); ax.axis('off')
-        ax.set_title('(E) SHAP Feature Importance')
-    else:
-        raise FileNotFoundError
-except Exception:
-    ax.axis('off')
-    ax.set_title('(E) SHAP Summary')
-    ax.text(0.5, 0.5, 'XGBoost/SHAP\nnot available\nor figures not saved',
-            ha='center', va='center', transform=ax.transAxes, fontsize=12,
-            bbox=dict(boxstyle='round', facecolor='lightyellow'))
+# (A) Boxplot with significance brackets
+ax_A = axes[0, 0]
+ax_A.boxplot(gdata,
+             tick_labels=["None\n(Q24=0)", "Informed\n(Q24=1)", "Consulted\n(Q24=2)"],
+             patch_artist=True,
+             boxprops=dict(facecolor="#AED6F1"),
+             medianprops=dict(color="navy", lw=2))
+ax_A.set_ylabel("Satisfaction (1-5)")
+ax_A.set_title("(A) Satisfaction by Participation Level")
+y_max_A = max(g.max() for g in gdata if len(g) > 0) + 0.3
+_, p01 = sp_stats.mannwhitneyu(g0, g1, alternative="two-sided")
+_, p02 = sp_stats.mannwhitneyu(g0, g2, alternative="two-sided")
+_, p12 = sp_stats.mannwhitneyu(g1, g2, alternative="two-sided")
+add_bracket(ax_A, 1, 2, y_max_A,        min(p01 * 3, 1.0))
+add_bracket(ax_A, 2, 3, y_max_A + 0.22, min(p12 * 3, 1.0))
+add_bracket(ax_A, 1, 3, y_max_A + 0.44, min(p02 * 3, 1.0))
 
-# (F) Tobit vs OLS coefficient comparison
-ax = axes8[1, 2]
-ax.bar(['OLS beta', 'Tobit beta'], [beta_ols[1], beta_tobit[1]], color=['steelblue', 'darkorange'])
-ax.axhline(0, color='black', lw=0.8)
-ax.set_ylabel('Coefficient (Q24 -> Q25)')
-ax.set_title('(F) Tobit vs OLS Coefficients')
-for i, (lbl, val) in enumerate(zip(['OLS', 'Tobit'], [beta_ols[1], beta_tobit[1]])):
-    ax.text(i, val + 0.01, f'{val:.3f}', ha='center', va='bottom', fontsize=10)
+# (B) Bar chart mean +/- SE
+ax_B = axes[0, 1]
+means_B = [g.mean() for g in gdata]
+ses_B   = [g.std() / np.sqrt(len(g)) for g in gdata]
+clrs_B  = ["#2ECC71", "#F39C12", "#9B59B6"]
+bars_B  = ax_B.bar([0, 1, 2], means_B, yerr=ses_B, capsize=5,
+                   color=clrs_B, edgecolor="white", width=0.55)
+ax_B.set_xticks([0, 1, 2])
+ax_B.set_xticklabels(["None\n(Q24=0)", "Informed\n(Q24=1)", "Consulted\n(Q24=2)"])
+ax_B.set_ylabel("Mean Satisfaction +/- SE")
+ax_B.set_title("(B) Mean Satisfaction by Participation Level")
+ax_B.set_ylim(0, 5.8)
+for bar, m in zip(bars_B, means_B):
+    ax_B.text(bar.get_x() + bar.get_width() / 2, m + 0.12, f"{m:.2f}", ha="center", fontsize=9)
 
-# (G) Q25 histogram annotated
-ax = axes8[2, 0]
-ax.hist(q25_valid, bins=np.arange(0.5, 6.5, 1), color='steelblue', edgecolor='white', alpha=0.8)
-ax.axvline(5, color='red', ls='--', lw=2, label=f'Ceiling: {ceiling_q25_5:.1%} at 5')
-ax.axvline(1, color='orange', ls='--', lw=2, label='Floor: 1')
-ax.set_xlabel('Satisfaction'); ax.set_ylabel('Count')
-ax.set_title('(G) Q25 Distribution -- Ceiling/Floor')
-ax.legend(fontsize=8)
+# (C) Scatter with jitter and trend line
+ax_C = axes[0, 2]
+scatter_df = df_sat[["q24", "q25"]].dropna()
+rng_j = np.random.default_rng(7)
+jx = scatter_df["q24"].values + rng_j.uniform(-0.12, 0.12, len(scatter_df))
+jy = scatter_df["q25"].values + rng_j.uniform(-0.12, 0.12, len(scatter_df))
+ax_C.scatter(jx, jy, alpha=0.45, color="steelblue", s=25)
+m_sc, b_sc = np.polyfit(scatter_df["q24"], scatter_df["q25"], 1)
+xl = np.linspace(-0.2, 2.2, 50)
+ax_C.plot(xl, m_sc * xl + b_sc, "r-", lw=2, label=f"slope={m_sc:.2f}")
+ax_C.set_xlabel("Q24 Participation Level")
+ax_C.set_ylabel("Q25 Satisfaction")
+ax_C.set_title("(C) Q24 vs Satisfaction (jittered)")
+ax_C.set_xticks([0, 1, 2])
+ax_C.legend(fontsize=8)
 
-# (H) Expectation gap verdict text
-ax = axes8[2, 1]
-ax.axis('off')
-ax.set_title('(H) Expectation Gap Theory')
-lines = [
-    f"Mean Sat Q24=0: {g0.mean():.2f}" if len(g0) else "Q24=0: n/a",
-    f"Mean Sat Q24=1: {g1.mean():.2f}" if len(g1) else "Q24=1: n/a",
-    f"Mean Sat Q24=2: {g2.mean():.2f}" if len(g2) else "Q24=2: n/a",
-    "",
-    f"KW H={H:.2f}, p={p_kw:.3f}",
-    f"Levene p={lev_p:.3f}",
-    "",
-    "VERDICT:",
-    verdict[:40],
-    verdict[40:] if len(verdict) > 40 else ""
-]
-ax.text(0.05, 0.95, '\n'.join(lines), transform=ax.transAxes,
-        va='top', fontsize=9, family='monospace',
-        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+# (D) PLS-SEM path diagram using matplotlib patches
+ax_D = axes[1, 0]
+ax_D.set_xlim(0, 10)
+ax_D.set_ylim(0, 7)
+ax_D.axis("off")
+ax_D.set_title("(D) PLS-SEM Path Diagram")
+draw_box(ax_D, 2.0, 5.5, 2.5, 0.9, "Q22\n(Participation\nlevel)")
+draw_box(ax_D, 2.0, 3.5, 2.5, 0.9, "Info Score\n(Q23 info)")
+draw_box(ax_D, 2.0, 1.5, 2.5, 0.9, "Consult Score\n(Q23 consult)")
+draw_box(ax_D, 5.7, 3.5, 2.2, 1.0, "PARTICIPATION\n(Latent)", color="#F9E79F")
+draw_box(ax_D, 8.8, 3.5, 2.2, 1.0, "SATISFACTION\n(Latent)", color="#ABEBC6")
+draw_arrow(ax_D, 3.25, 5.5, 4.6, 4.1, f"w={weights[0]:.2f}")
+draw_arrow(ax_D, 3.25, 3.5, 4.6, 3.5, f"w={weights[1]:.2f}")
+draw_arrow(ax_D, 3.25, 1.5, 4.6, 2.9, f"w={weights[2]:.2f}")
+draw_arrow(ax_D, 6.8,  3.5, 7.7, 3.5, f"beta={path_coef:.2f}")
+
+# (E) SHAP beeswarm recreated manually if SHAP not available
+ax_E = axes[1, 1]
+ax_E.set_title("(E) SHAP Feature Importance")
+if shap_available and shap_vals_for_panel is not None:
+    mean_abs = np.abs(shap_vals_for_panel).mean(axis=0)
+    sidx     = np.argsort(mean_abs)
+    clrs_E   = ["#E74C3C", "#E67E22", "#3498DB", "#2ECC71", "#9B59B6"]
+    ax_E.barh(range(len(feat_cols_for_panel)), mean_abs[sidx],
+              color=[clrs_E[i % len(clrs_E)] for i in range(len(sidx))])
+    ax_E.set_yticks(range(len(feat_cols_for_panel)))
+    ax_E.set_yticklabels([feat_cols_for_panel[i] for i in sidx], fontsize=8)
+    ax_E.set_xlabel("Mean |SHAP value|")
+else:
+    feat_names_e = ["q22", "info_score", "consult_score", "q24", "composite"]
+    corrs_e = []
+    for fn in ["q22", "info_score", "consult_score", "q24"]:
+        sub_e = df_full[[fn, "q25"]].dropna()
+        corrs_e.append(abs(sp_stats.spearmanr(sub_e[fn], sub_e["q25"])[0]))
+    comp_e = (df_full["q22"].fillna(0) * 0.35
+              + df_full["q24"].fillna(0) * 0.20
+              + (df_full["info_score"].fillna(0) + df_full["consult_score"].fillna(0)) * 0.45)
+    corrs_e.append(abs(sp_stats.spearmanr(comp_e, df_full["q25"].fillna(df_full["q25"].mean()))[0]))
+    sidx_e = np.argsort(corrs_e)
+    ax_E.barh(range(5), [corrs_e[i] for i in sidx_e], color="#3498DB", alpha=0.8)
+    ax_E.set_yticks(range(5))
+    ax_E.set_yticklabels([feat_names_e[i] for i in sidx_e], fontsize=8)
+    ax_E.set_xlabel("|Spearman rho| (importance proxy)")
+
+# (F) Tobit vs OLS coefficient comparison bar chart
+ax_F = axes[1, 2]
+ax_F.set_title("(F) Tobit vs OLS: beta (Q24->Q25)")
+beta_labels_F = ["OLS", "Tobit"]
+beta_vals_F   = [beta_ols[1], tobit_beta_q24]
+clrs_F        = ["#2980B9", "#E74C3C"]
+bars_F = ax_F.bar(beta_labels_F, beta_vals_F, color=clrs_F, width=0.45, edgecolor="white")
+ax_F.axhline(0, color="black", lw=0.8, ls="--")
+ax_F.set_ylabel("Coefficient beta")
+for bar, val in zip(bars_F, beta_vals_F):
+    off = 0.008 if val >= 0 else -0.012
+    ax_F.text(bar.get_x() + bar.get_width() / 2, val + off, f"{val:.3f}",
+              ha="center", va="bottom" if val >= 0 else "top", fontsize=10)
+
+# (G) Ceiling/floor histogram Q25 annotated
+ax_G = axes[2, 0]
+ax_G.hist(q25_valid, bins=np.arange(0.5, 6.5, 1),
+          color="mediumseagreen", edgecolor="white", alpha=0.85)
+ax_G.axvline(5, color="red",  ls="--", lw=2, label=f"Ceiling 5: {ceil_q25_5:.1%}")
+ax_G.axvline(1, color="blue", ls="--", lw=1.5, label="Floor 1")
+ax_G.set_xlabel("Q25 Satisfaction")
+ax_G.set_ylabel("Count")
+ax_G.set_title("(G) Ceiling/Floor: Q25 Distribution")
+ax_G.legend(fontsize=8)
+ylim_G = ax_G.get_ylim()[1]
+ax_G.text(4.9, ylim_G * 0.88, f"{ceil_q25_5:.1%} at ceiling", ha="right", fontsize=8, color="red")
+ax_G.text(1.1, ylim_G * 0.88, f"{(q25_valid==1).mean():.1%} at floor", ha="left", fontsize=8, color="blue")
+
+# (H) Expectation gap verdict text panel
+ax_H = axes[2, 1]
+ax_H.axis("off")
+ax_H.set_title("(H) Expectation Gap Verdict")
+summary_text = (
+    f"Expectation Gap Theory Test\n"
+    f"{'=' * 34}\n"
+    f"Q24=2 vs Q24<=1 (one-tailed MW):\n"
+    f"  U = {U_eg:.0f},  p = {p_eg:.4f}\n\n"
+    f"Cohen\'s d (Q24=2 vs Q24=0):\n"
+    f"  d = {d_coh:.3f}\n\n"
+    f"Levene variance test:\n"
+    f"  F = {lev_stat:.3f},  p = {lev_p:.4f}\n\n"
+    f"Verdict: {verdict}\n\n"
+    f"{'Consulted participants report' if verdict == 'SUPPORTED' else 'No significant gap:'}\n"
+    f"{'higher satisfaction (gap theory ok).' if verdict == 'SUPPORTED' else 'groups similar in satisfaction.'}"
+)
+ax_H.text(0.05, 0.95, summary_text, transform=ax_H.transAxes,
+          va="top", ha="left", fontsize=8.5, family="monospace",
+          bbox=dict(boxstyle="round", facecolor="#FEF9E7", edgecolor="#F39C12", lw=1.5))
 
 # (I) Jonckheere trend visualization
-ax = axes8[2, 2]
-q24_vals = [0, 1, 2]
-mean_sat = [g.mean() if len(g) else np.nan for g in [g0, g1, g2]]
-ax.plot(q24_vals, mean_sat, 'o-', color='steelblue', ms=8, lw=2)
-ax.fill_between(q24_vals,
-                [m - s for m, s in zip(mean_sat, sems)],
-                [m + s for m, s in zip(mean_sat, sems)],
-                alpha=0.3, color='steelblue')
-ax.set_xlabel('Q24 Participation Level'); ax.set_ylabel('Mean Satisfaction')
-ax.set_title(f'(I) Jonckheere Trend: Z={z_J:.2f}, p={p_J:.3f}')
-ax.set_xticks([0, 1, 2]); ax.set_xticklabels(['None', 'Info', 'Consult'])
-sig_str = '(sig.)' if p_J < 0.05 else '(n.s.)'
-ax.text(0.98, 0.05, f'Trend {sig_str}', transform=ax.transAxes, ha='right', fontsize=10,
-        color='red' if p_J < 0.05 else 'gray')
+ax_I = axes[2, 2]
+ax_I.set_title("(I) Jonckheere-Terpstra Trend")
+medians_I = [np.median(g) for g in gdata]
+means_I   = [np.mean(g)   for g in gdata]
+ax_I.plot([0, 1, 2], means_I,   "o-",  color="#E74C3C", lw=2, ms=8, label="Mean")
+ax_I.plot([0, 1, 2], medians_I, "s--", color="#2980B9", lw=2, ms=8, label="Median")
+ax_I.fill_between([0, 1, 2], means_I, alpha=0.12, color="#E74C3C")
+ax_I.set_xticks([0, 1, 2])
+ax_I.set_xticklabels(["None\n(Q24=0)", "Informed\n(Q24=1)", "Consulted\n(Q24=2)"])
+ax_I.set_ylabel("Satisfaction (1-5)")
+ax_I.legend(fontsize=8)
+ax_I.text(0.97, 0.06, f"JT: z={z_jt:.2f}, p={p_jt:.4f}",
+          transform=ax_I.transAxes, ha="right", fontsize=8.5, color="darkred",
+          bbox=dict(boxstyle="round", facecolor="lightyellow", edgecolor="orange", lw=1))
 
-plt.tight_layout()
-plt.savefig(os.path.join(RESULTS_DIR, 'comprehensive_results.png'), dpi=150, bbox_inches='tight')
-plt.close()
-print("Saved: comprehensive_results.png")
+fig_panel.suptitle(
+    "Comprehensive Analysis Panel: Public Participation & Satisfaction",
+    fontsize=14, fontweight="bold", y=1.01,
+)
+panel_path = os.path.join(RESULTS, "panel_3x3_comprehensive.png")
+fig_panel.savefig(panel_path, dpi=150, bbox_inches="tight")
+plt.close(fig_panel)
+print(f"Panel figure saved: {panel_path}")
 
-# ============================================================
-# SECTION 9: SUMMARY AND SAVE
-# ============================================================
-print("\n" + "=" * 60)
+# ==============================================================================
+# SECTION 9 - SUMMARY AND SAVE
+# ==============================================================================
+print("\n" + "=" * 70)
 print("SECTION 9: SUMMARY AND SAVE")
-print("=" * 60)
+print("=" * 70)
 
 summary_rows = [
-    {'Test': 'Sample size (full cleaned)',        'Statistic': f'n={len(df)}',           'Detail': ''},
-    {'Test': 'Sample size (with satisfaction)',   'Statistic': f'n={len(df_sat)}',        'Detail': ''},
-    {'Test': 'Sample size (complete cases)',      'Statistic': f'n={len(df_full)}',       'Detail': ''},
-    {'Test': 'Q25 Shapiro-Wilk',                 'Statistic': f'W={sw_stat:.4f}',        'Detail': f'p={sw_p:.4f}'},
-    {'Test': 'Kruskal-Wallis',                   'Statistic': f'H={H:.3f}',              'Detail': f'p={p_kw:.4f}, e2={eps_sq:.3f}'},
-    {'Test': 'Jonckheere-Terpstra',              'Statistic': f'J={J_stat:.1f}, Z={z_J:.3f}', 'Detail': f'p={p_J:.4f}'},
-    {'Test': 'Ceiling Q25 (at 5)',               'Statistic': f'{ceiling_q25_5:.1%}',    'Detail': f'4+5: {ceiling_q25_45:.1%}'},
-    {'Test': 'Floor Q24 (at 0)',                 'Statistic': f'{floor_q24_0:.1%}',      'Detail': f'0+1: {floor_q24_01:.1%}'},
-    {'Test': 'OLS beta (Q24->Q25)',              'Statistic': f'{beta_ols[1]:.3f}',      'Detail': ''},
-    {'Test': 'Tobit beta (Q24->Q25)',            'Statistic': f'{beta_tobit[1]:.3f}',    'Detail': ''},
-    {'Test': 'PLS path beta (PART->SAT)',        'Statistic': f'{beta_inner[1]:.3f}',    'Detail': f'R2={R2_pls:.3f}, Q2={Q2_pls:.3f}'},
-    {'Test': 'Expectation Gap Verdict',          'Statistic': verdict[:60],              'Detail': ''},
-    {'Test': 'XGBoost CV R2',                   'Statistic': f'{cv_r2.mean():.3f}',     'Detail': f'RMSE={cv_rmse.mean():.3f}'},
+    {"Analysis": "Descriptive",    "Test/Model": "N complete cases",
+     "Statistic": str(len(df_full)), "p-value": "-", "Effect size": "-"},
+    {"Analysis": "Descriptive",    "Test/Model": "Mean Q25",
+     "Statistic": f"{df_sat['q25'].mean():.3f}", "p-value": "-", "Effect size": "-"},
+    {"Analysis": "Ceiling/Floor",  "Test/Model": "Ceiling Q25 at 5",
+     "Statistic": f"{ceil_q25_5:.3f}", "p-value": "-", "Effect size": "-"},
+    {"Analysis": "Ceiling/Floor",  "Test/Model": "Floor Q24 at 0",
+     "Statistic": f"{floor_q24_0:.3f}", "p-value": "-", "Effect size": "-"},
+    {"Analysis": "Tobit",          "Test/Model": "Tobit beta (Q24->Q25)",
+     "Statistic": f"{tobit_beta_q24:.3f}", "p-value": "-", "Effect size": "-"},
+    {"Analysis": "Tobit",          "Test/Model": "OLS beta (Q24->Q25)",
+     "Statistic": f"{beta_ols[1]:.3f}", "p-value": "-", "Effect size": "-"},
+    {"Analysis": "Non-parametric", "Test/Model": "Shapiro-Wilk Q25",
+     "Statistic": f"W={sw_stat:.4f}", "p-value": f"{sw_p:.4f}", "Effect size": "-"},
+    {"Analysis": "Non-parametric", "Test/Model": "Kruskal-Wallis H",
+     "Statistic": f"H={kw_H:.4f}", "p-value": f"{kw_p:.4f}",
+     "Effect size": f"epsilon2={eps_sq:.3f}"},
+    {"Analysis": "Non-parametric", "Test/Model": "Jonckheere-Terpstra z",
+     "Statistic": f"z={z_jt:.3f}", "p-value": f"{p_jt:.4f}", "Effect size": "-"},
+    {"Analysis": "PLS-SEM",        "Test/Model": "Path beta (PART->SAT)",
+     "Statistic": f"{path_coef:.3f}",
+     "p-value": f"95%CI[{ci_lo:.3f},{ci_hi:.3f}]",
+     "Effect size": f"R2={r2_inner:.3f},f2={f2_pls:.3f},Q2={q2_blind:.3f}"},
+    {"Analysis": "Expectation Gap","Test/Model": "MW U (Q24=2 vs <=1)",
+     "Statistic": f"U={U_eg:.0f}", "p-value": f"{p_eg:.4f}",
+     "Effect size": f"d={d_coh:.3f}"},
+    {"Analysis": "Expectation Gap","Test/Model": "Verdict",
+     "Statistic": verdict, "p-value": "-", "Effect size": "-"},
 ]
+if shap_available:
+    summary_rows.append({
+        "Analysis": "XGBoost", "Test/Model": "5-fold CV R2",
+        "Statistic": f"{cv_r2_mean:.3f}", "p-value": "-",
+        "Effect size": f"RMSE={cv_rmse_mean:.3f}",
+    })
 
 summary_df = pd.DataFrame(summary_rows)
+csv_path   = os.path.join(RESULTS, "results_full_summary.csv")
+summary_df.to_csv(csv_path, index=False)
+print(f"\nSummary CSV saved: {csv_path}")
+print("\nConsolidated Summary Table:")
 print(summary_df.to_string(index=False))
 
-summary_df.to_csv(os.path.join(RESULTS_DIR, 'results_full_summary.csv'), index=False)
-desc_df.to_csv(os.path.join(RESULTS_DIR, 'descriptive_statistics.csv'), index=False)
-
-print(f"\nAll results saved to: {RESULTS_DIR}")
-print("\nAnalysis complete.")
+print("\n" + "=" * 70)
+print("ALL SECTIONS COMPLETE")
+print(f"Results saved to: {RESULTS}")
+print("=" * 70)

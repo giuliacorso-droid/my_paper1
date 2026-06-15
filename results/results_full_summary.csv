@@ -1,14 +1,14 @@
-Test,Statistic,Detail
-Sample size (full cleaned),n=157,
-Sample size (with satisfaction),n=115,
-Sample size (complete cases),n=78,
-Q25 Shapiro-Wilk,W=0.8350,p=0.0000
-Kruskal-Wallis,H=14.917,"p=0.0006, e2=0.172"
-Jonckheere-Terpstra,"J=633.5, Z=-3.478",p=0.9997
-Ceiling Q25 (at 5),9.6%,4+5: 59.1%
-Floor Q24 (at 0),48.0%,0+1: 74.0%
-OLS beta (Q24->Q25),0.401,
-Tobit beta (Q24->Q25),0.441,
-PLS path beta (PART->SAT),0.299,"R2=0.089, Q2=0.007"
-Expectation Gap Verdict,DISCONFIRMED: Higher participation not associated with lower,
-XGBoost CV R2,0.073,RMSE=0.730
+Analysis,Test/Model,Statistic,p-value,Effect size
+Descriptive,N complete cases,78,-,-
+Descriptive,Mean Q25,3.617,-,-
+Ceiling/Floor,Ceiling Q25 at 5,0.096,-,-
+Ceiling/Floor,Floor Q24 at 0,0.480,-,-
+Tobit,Tobit beta (Q24->Q25),0.441,-,-
+Tobit,OLS beta (Q24->Q25),0.401,-,-
+Non-parametric,Shapiro-Wilk Q25,W=0.8350,0.0000,-
+Non-parametric,Kruskal-Wallis H,H=10.9959,0.0041,epsilon2=0.083
+Non-parametric,Jonckheere-Terpstra z,z=2.968,0.0015,-
+PLS-SEM,Path beta (PART->SAT),0.299,"95%CI[0.102,0.484]","R2=0.091,f2=0.100,Q2=-0.004"
+Expectation Gap,MW U (Q24=2 vs <=1),U=1874,0.0007,d=0.786
+Expectation Gap,Verdict,SUPPORTED,-,-
+XGBoost,5-fold CV R2,0.095,-,RMSE=0.721
