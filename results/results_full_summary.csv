@@ -1,32 +1,32 @@
-Metric,Value
-N (with satisfaction),115
-N (complete cases),78
-Q25 at ceiling (=5),9.6%
-Q24 at floor (=0),33.3%
-Tobit/OLS ratio,1.101
-Censoring bias present,True
-Shapiro-Wilk Q25 p,0.0000
+Statistic,Value
+N (df_full),78
+N (df_sat),115
+Mean Satisfaction (Q25),3.6174
+SD Satisfaction (Q25),0.7789
+Ceiling Q25 (proportion ≥4),0.5913
+Ceiling Q25 (proportion =5),0.0957
+Floor Q24 (proportion =0),0.3205
+Kurtosis Q25 (excess),1.0533
+Shapiro-Wilk W (Q25),0.835
+Shapiro-Wilk p (Q25),0.0
 Kruskal-Wallis H,10.9959
 Kruskal-Wallis p,0.0041
-Effect size ε²,0.0833
-None vs Consult MW p_bonf,0.0046
-None vs Consult r (rank-bis.),0.387
-Jonckheere-Terpstra z,3.1188
-Jonckheere-Terpstra p,0.0009
-Spearman ρ (Q24↔Q25),0.3089
-Spearman p,0.0010
-Ordinal logit β (Q24),1.0924
-Ordinal logit p (Q24),0.0002
-PLS β (PL→PST),0.2987
-PLS p,0.0079
-PLS CI 95%,"[0.0505, 0.4605]"
-PLS R²,0.0892
-PLS Q²,0.0165
-Cohen's d (Consult−None),0.7932
-Levene F (variance homog.),1.7487
-Levene p,0.1789
-Consult SD > None SD,False
-XGBoost CV R²,0.0901±0.2785
-SHAP top feature,part_composite
-SHAP Q24 direction,positive
-Expectation Gap confirmed,False
+Epsilon² (KW effect size),0.0833
+Spearman ρ (Q24↔Q25),0.4261
+Spearman p (Q24↔Q25),0.0001
+J-T J statistic,2599.5
+J-T z statistic,2.9682
+J-T p-value,0.003
+OLS β (Q24→Q25),0.4007
+Tobit β (Q24→Q25),0.4413
+PLS-SEM β (PART→SAT),0.21
+PLS-SEM R²,0.0892
+PLS-SEM f²,0.0979
+PLS-SEM Q²,0.0677
+PLS-SEM Bootstrap CI low (95%),0.0449
+PLS-SEM Bootstrap CI high (95%),0.3233
+Ordinal LogReg McFadden R² M1,0.0855
+Ordinal LogReg McFadden R² M2,0.0527
+XGBoost 5-fold CV mean R²,0.095
+EGT verdict,EGT DISCONFIRMED
+EGT tests aligned / total,0/4
