@@ -1,38 +1,14 @@
-Category,Metric,Value,Notes
-Descriptive,n (df),157,After removing flag==1
-Descriptive,n (df_sat),115,Satisfaction non-NaN
-Descriptive,n (df_full),78,All 5 vars non-NaN
-Descriptive,Mean Q25,3.6174,
-Descriptive,SD Q25,0.7789,
-Ceiling/Floor,Prop Q24=0 (floor),0.48,
-Ceiling/Floor,Prop Q24=0+1,0.74,
-Ceiling/Floor,Prop Q25=5 (ceiling),0.0957,
-Ceiling/Floor,Prop Q25>=4,0.5913,
-Ceiling/Floor,OLS β (Q24→Q25),0.4007,
-Ceiling/Floor,Tobit β (Q24→Q25),0.4413,
-Non-Parametric,Shapiro-Wilk W,0.835,Q25
-Non-Parametric,Shapiro-Wilk p,0.0,Q25
-Non-Parametric,Kruskal-Wallis H,14.9168,
-Non-Parametric,Kruskal-Wallis p,0.0006,
-Non-Parametric,Epsilon-squared,0.1722,
-Non-Parametric,Spearman rho (Q24-Q25),0.4261,
-Non-Parametric,Spearman p (Q24-Q25),0.0001,
-Non-Parametric,Kendall tau (Q24-Q25),0.3857,
-Non-Parametric,JT J stat,633.5,Jonckheere-Terpstra
-Non-Parametric,JT z,-3.4782,
-Non-Parametric,JT p (one-tailed),0.9997,
-PLS-SEM,Path coef (PART→SAT),0.2968,
-PLS-SEM,R2 (inner),0.0892,
-PLS-SEM,Q2 (blindfolding d=7),0.0116,
-PLS-SEM,f2,0.0979,
-PLS-SEM,Bootstrap CI low,0.0496,95%
-PLS-SEM,Bootstrap CI high,0.4641,95%
-PLS-SEM,OW q22,0.5402,Outer weight
-PLS-SEM,OW info_score,0.5728,Outer weight
-PLS-SEM,OW consult_score,0.6166,Outer weight
-ExpGap,Cohens d (Q24=0 vs 2),-1.1045,
-ExpGap,Verdict,DISCONFIRMED,
-ExpGap,Levene W,0.7522,
-ExpGap,Levene p,0.4749,
-XGBoost,CV R2 (5-fold),0.0891,
-XGBoost,CV RMSE (5-fold),0.7243,
+Test,Statistic,Detail
+Sample size (full cleaned),n=157,
+Sample size (with satisfaction),n=115,
+Sample size (complete cases),n=78,
+Q25 Shapiro-Wilk,W=0.8350,p=0.0000
+Kruskal-Wallis,H=14.917,"p=0.0006, e2=0.172"
+Jonckheere-Terpstra,"J=633.5, Z=-3.478",p=0.9997
+Ceiling Q25 (at 5),9.6%,4+5: 59.1%
+Floor Q24 (at 0),48.0%,0+1: 74.0%
+OLS beta (Q24->Q25),0.401,
+Tobit beta (Q24->Q25),0.441,
+PLS path beta (PART->SAT),0.299,"R2=0.089, Q2=0.007"
+Expectation Gap Verdict,DISCONFIRMED: Higher participation not associated with lower,
+XGBoost CV R2,0.073,RMSE=0.730
