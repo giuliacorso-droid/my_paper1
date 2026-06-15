@@ -1,0 +1,19 @@
+                             OrderedModel Results                             
+==============================================================================
+Dep. Variable:                q26_cat   Log-Likelihood:                    nan
+Model:                   OrderedModel   AIC:                               nan
+Method:            Maximum Likelihood   BIC:                               nan
+Date:                Mon, 15 Jun 2026                                         
+Time:                        12:48:38                                         
+No. Observations:                  96                                         
+Df Residuals:                      91                                         
+Df Model:                           1                                         
+==============================================================================
+                 coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------
+PL                  0        nan        nan        nan         nan         nan
+1/2              -inf        nan        nan        nan         nan         nan
+2/3               nan        nan        nan        nan         nan         nan
+3/4               inf        nan        nan        nan         nan         nan
+4/5            1.2473        nan        nan        nan         nan         nan
+==============================================================================

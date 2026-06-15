@@ -1,14 +1,2 @@
-Analysis,Test/Model,Statistic,p-value,Effect size
-Descriptive,N complete cases,78,-,-
-Descriptive,Mean Q25,3.617,-,-
-Ceiling/Floor,Ceiling Q25 at 5,0.096,-,-
-Ceiling/Floor,Floor Q24 at 0,0.480,-,-
-Tobit,Tobit beta (Q24->Q25),0.441,-,-
-Tobit,OLS beta (Q24->Q25),0.401,-,-
-Non-parametric,Shapiro-Wilk Q25,W=0.8350,0.0000,-
-Non-parametric,Kruskal-Wallis H,H=10.9959,0.0041,epsilon2=0.083
-Non-parametric,Jonckheere-Terpstra z,z=2.968,0.0015,-
-PLS-SEM,Path beta (PART->SAT),0.299,"95%CI[0.102,0.484]","R2=0.091,f2=0.100,Q2=-0.004"
-Expectation Gap,MW U (Q24=2 vs <=1),U=1874,0.0007,d=0.786
-Expectation Gap,Verdict,SUPPORTED,-,-
-XGBoost,5-fold CV R2,0.095,-,RMSE=0.721
+N_total,N_sat_Q26,N_full_complete,pct_ceiling_Q26,KW_H,KW_p,KW_eps2,JT_z,JT_p,Spearman_PL_Q26_r,Spearman_PL_Q26_p,Kendall_PL_Q26_tau,Kendall_PL_Q26_p,PLS_path_PL_Q26,PLS_boot_CI_lo,PLS_boot_CI_hi,PLS_AVE,PLS_CR,PLS_Q2,Tobit_b1,OLS_b1,Tobit_OLS_ratio,EGT_verdict,Group_mean_None,Group_mean_Info,Group_mean_Consult
+162,153,96,31.372549019607842,1.311508279548915,0.5190504783403116,-0.007403136779043924,-0.9446886951395039,0.8275910849024821,-0.09320758696303287,0.40787795616168554,-0.0776144203980464,0.3988193741045374,0.01268152377297214,-0.2269764315596933,0.25343161079175636,0.4788070665036135,0.6978101232741983,-0.16297211580465487,-0.0597330751024756,-0.03496289361997118,1.708470583773492,NOT CONFIRMED (direction consistent but all tests p>0.05),4.258620689655173,4.130434782608695,4.133333333333334

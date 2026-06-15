@@ -1,545 +1,387 @@
 ---
-title: "QWP SEM Analysis – Participation & Satisfaction"
+title: "Qinghe Park – Participation & Satisfaction SEM Analysis"
 author: "Analysis"
 date: "`r Sys.Date()`"
-output: html_document
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: flatly
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
 ```
 
-## 1. Data Loading and Cleaning
+## 1. Data Loading and Recoding
 
 ```{r load-data}
-library(readxl)
 library(dplyr)
 library(tidyr)
+library(stringr)
 
-DATA_PATH <- "/root/.claude/uploads/7e325fe5-5704-55cc-9ede-a4a3bdde6097/4372d09e-Participation_Constructs.xlsx"
+CSV_PATH <- "/root/.claude/uploads/7e325fe5-5704-55cc-9ede-a4a3bdde6097/a9a78d92-Qinghe_Survey_Integrated_v2.csv"
 
-df_raw <- read_excel(DATA_PATH)
-cat("Columns:", paste(names(df_raw), collapse=", "), "\n")
-cat("Rows:", nrow(df_raw), "\n")
+raw <- read.csv(CSV_PATH, sep=";", fileEncoding="UTF-8", check.names=FALSE)
+cat("Shape:", nrow(raw), "x", ncol(raw), "\n")
 
-# Helper: find column by partial name match (case-insensitive)
-find_col <- function(df, keyword) {
-  idx <- grep(keyword, names(df), ignore.case=TRUE, value=FALSE)
-  if (length(idx) > 0) names(df)[idx[1]] else NA_character_
+# --- Q22: Pre-project information access (text → ordinal 0/1/2) ---
+recode_q22 <- function(x) {
+  x <- str_trim(str_to_lower(x))
+  case_when(
+    str_detect(x, "not informed|no information|not answered") ~ 0L,
+    str_detect(x, "consulted")                                ~ 2L,
+    str_detect(x, "informed")                                 ~ 1L,
+    TRUE ~ NA_integer_
+  )
+}
+q22_col <- grep("Q22", names(raw), value=TRUE)[1]
+raw$q22_ord <- recode_q22(raw[[q22_col]])
+raw$q22_bin <- if_else(raw$q22_ord > 0, 1L, 0L, missing=NA_integer_)
+
+# --- Q23.x: channel indicators → info_score and consult_score ---
+chan_cols <- grep("^Q23\\.", names(raw), value=TRUE)
+consult_chans <- grep("Q23\\.6|Q23\\.7|Q23\\.13", chan_cols, value=TRUE)
+info_chans    <- setdiff(chan_cols, consult_chans)
+
+yn_to_bin <- function(v) {
+  v2 <- str_trim(str_to_lower(as.character(v)))
+  case_when(v2 == "yes" ~ 1L, v2 == "no" ~ 0L,
+            v2 == "1"   ~ 1L, v2 == "0"  ~ 0L,
+            !is.na(v) & v2 != "na" ~ NA_integer_,
+            TRUE ~ 0L)
 }
 
-col_q22     <- find_col(df_raw, "q22")
-col_info    <- find_col(df_raw, "info")
-col_consult <- find_col(df_raw, "consult")
-col_q24     <- find_col(df_raw, "q24")
-col_sat     <- find_col(df_raw, "sat")
-col_flag    <- find_col(df_raw, "flag")
+chan_mat <- as.data.frame(lapply(raw[, chan_cols, drop=FALSE], yn_to_bin))
+raw$n_info_chans    <- rowSums(chan_mat[, info_chans,    drop=FALSE], na.rm=TRUE)
+raw$n_consult_chans <- rowSums(chan_mat[, consult_chans, drop=FALSE], na.rm=TRUE)
+raw$info_score      <- raw$n_info_chans    / length(info_chans)
+raw$consult_score   <- raw$n_consult_chans / length(consult_chans)
 
-cat("Mapped: q22=", col_q22, " info=", col_info, " consult=", col_consult,
-    " q24=", col_q24, " sat=", col_sat, " flag=", col_flag, "\n")
-
-# Rename and subset
-df <- df_raw
-rename_vec <- c()
-if (!is.na(col_q22))     rename_vec[col_q22]     <- "q22"
-if (!is.na(col_info))    rename_vec[col_info]     <- "info_score"
-if (!is.na(col_consult)) rename_vec[col_consult]  <- "consult_score"
-if (!is.na(col_q24))     rename_vec[col_q24]      <- "q24"
-if (!is.na(col_sat))     rename_vec[col_sat]       <- "satisfaction"
-if (!is.na(col_flag))    rename_vec[col_flag]      <- "flag"
-
-df <- df_raw %>% rename(any_of(rename_vec))
-
-# Remove flag==1 rows
-if ("flag" %in% names(df)) {
-  before_n <- nrow(df)
-  df <- df %>% filter(flag != 1 | is.na(flag))
-  cat("Removed", before_n - nrow(df), "flagged rows.\n")
-  df <- df %>% select(-flag)
+# --- Q24: Signage (text → ordinal 0/1/2) ---
+q24_col <- grep("Q24", names(raw), value=TRUE)[1]
+recode_q24 <- function(x) {
+  x <- str_trim(str_to_lower(x))
+  case_when(
+    x == "no"                           ~ 0L,
+    str_detect(x, "did not understand") ~ 1L,
+    str_detect(x, "understood")         ~ 2L,
+    TRUE ~ NA_integer_
+  )
 }
+raw$q24_ord <- recode_q24(raw[[q24_col]])
 
-# Keep only relevant columns that exist
-keep_cols <- intersect(c("q22","info_score","consult_score","q24","satisfaction"), names(df))
-df <- df %>% select(all_of(keep_cols))
+# --- Q25: Terminology clarity (1–5; 6=DK → NA) ---
+q25_col <- grep("Q25", names(raw), value=TRUE)[1]
+raw$q25  <- as.numeric(raw[[q25_col]])
+raw$q25[raw$q25 == 6] <- NA
 
-# Coerce to numeric
-df <- df %>% mutate(across(everything(), as.numeric))
+# --- Q26: Maintenance rating — PRIMARY SATISFACTION OUTCOME ---
+q26_col <- grep("Q26", names(raw), value=TRUE)[1]
+raw$q26  <- as.numeric(raw[[q26_col]])
+raw$q26[raw$q26 == 6] <- NA
 
-# Convert q24 to ordered factor, satisfaction to numeric
-if ("q24" %in% names(df)) {
-  df$q24_num <- df$q24
-  df$q24 <- factor(df$q24, levels=sort(unique(df$q24, na.rm=TRUE)), ordered=TRUE)
-}
-if ("satisfaction" %in% names(df)) {
-  df$satisfaction <- as.numeric(df$satisfaction)
-}
+# --- Q27: Binary satisfaction ---
+q27_col <- grep("Q27", names(raw), value=TRUE)[1]
+raw$q27_bin <- if_else(str_trim(str_to_lower(raw[[q27_col]])) == "yes", 1L, 0L)
 
-df_complete <- df %>% drop_na()
+# --- Q12–Q21: Performance composite ---
+perf_cols <- grep("^Q1[2-9]|^Q2[01] ", names(raw), value=TRUE)
+perf_mat  <- as.data.frame(lapply(raw[, perf_cols, drop=FALSE], function(v) {
+  x <- as.numeric(v); x[x == 6] <- NA; x
+}))
+raw$perf_composite <- rowMeans(perf_mat, na.rm=TRUE)
 
-cat("Complete cases:", nrow(df_complete), "\n")
-head(df_complete)
+# --- Normalise participation indicators to [0,1] ---
+raw$q22_norm <- raw$q22_ord / 2
+raw$q24_norm <- raw$q24_ord / 2
+raw$q25_norm <- (raw$q25 - 1) / 4
+
+# --- IAP2-weighted Participation Level composite ---
+W_Q22 <- 0.35; W_CHAN <- 0.15; W_Q24 <- 0.20; W_Q25 <- 0.30
+raw$PL <- W_Q22 * replace_na(raw$q22_norm, 0) +
+          W_CHAN * replace_na(raw$info_score, 0) +
+          W_Q24 * replace_na(raw$q24_norm, 0) +
+          W_Q25 * replace_na(raw$q25_norm, 0)
+
+# --- Participation group ---
+raw$part_group <- factor(case_when(
+  raw$q22_ord == 0 ~ "None",
+  raw$q22_ord == 1 ~ "Info",
+  raw$q22_ord == 2 ~ "Consult",
+  TRUE ~ NA_character_
+), levels=c("None","Info","Consult"), ordered=TRUE)
+
+# --- Nearby subsample: within 1km ---
+dist_col  <- grep("Q10", names(raw), value=TRUE)[1]
+raw$nearby <- str_detect(str_to_lower(raw[[dist_col]]), "within 500m|within 1km")
+
+# --- Working datasets ---
+df_sat   <- raw %>% filter(!is.na(q26))
+df_full  <- raw %>% filter(!is.na(q22_ord), !is.na(q24_ord), !is.na(q26)) %>% drop_na(q22_norm, q24_norm)
+df_nearby <- df_sat %>% filter(nearby)
+
+cat(sprintf("N total: %d | N with Q26: %d | N complete: %d | N nearby: %d\n",
+            nrow(raw), nrow(df_sat), nrow(df_full), nrow(df_nearby)))
+cat("Q22 group counts:\n"); print(table(raw$part_group, useNA="ifany"))
+cat("Q26 ceiling (==5):", round(100*mean(df_sat$q26 == 5, na.rm=TRUE), 1), "%\n")
 ```
 
-## 2. Helper Function
-
-```{r helper}
-qtable <- function(x, caption="") {
-  knitr::kable(x, caption=caption, digits=3)
-}
-```
-
-## 3. Descriptive Statistics
+## 2. Descriptive Statistics
 
 ```{r descriptives}
 library(knitr)
 
-num_vars <- c("q22","info_score","consult_score","q24_num","satisfaction")
-num_vars <- intersect(num_vars, names(df_complete))
+desc_var <- function(v, label) {
+  x <- v[!is.na(v)]
+  data.frame(Variable=label, N=length(x), Mean=round(mean(x),3),
+             Median=round(median(x),3), SD=round(sd(x),3),
+             Min=round(min(x),3), Max=round(max(x),3),
+             Pct_ceiling=round(100*mean(x==max(x)),1))
+}
 
-desc_list <- lapply(num_vars, function(v) {
-  x <- df_complete[[v]]
-  x_clean <- x[!is.na(x)]
-  data.frame(
-    Variable  = v,
-    N         = length(x_clean),
-    Mean      = mean(x_clean),
-    Median    = median(x_clean),
-    SD        = sd(x_clean),
-    Min       = min(x_clean),
-    Max       = max(x_clean),
-    Skewness  = if (requireNamespace("e1071", quietly=TRUE)) e1071::skewness(x_clean) else NA,
-    Kurtosis  = if (requireNamespace("e1071", quietly=TRUE)) e1071::kurtosis(x_clean) else NA
-  )
-})
-desc_df <- do.call(rbind, desc_list)
-qtable(desc_df, caption="Descriptive Statistics")
+desc_list <- list(
+  desc_var(raw$q22_ord,       "Q22 Info level (0–2)"),
+  desc_var(raw$info_score,    "Info channels score"),
+  desc_var(raw$consult_score, "Consult channels score"),
+  desc_var(raw$q24_ord,       "Q24 Signage (0–2)"),
+  desc_var(raw$q25,           "Q25 Terminology clarity (1–5)"),
+  desc_var(raw$q26,           "Q26 Maintenance satisfaction (1–5)"),
+  desc_var(raw$q27_bin,       "Q27 Future benefits (0/1)"),
+  desc_var(raw$PL,            "PL composite (IAP2-weighted)"),
+  desc_var(raw$perf_composite,"Performance composite Q12–Q21")
+)
+kable(do.call(rbind, desc_list), caption="Descriptive Statistics")
 ```
 
-## 4. lavaan Path Analysis
+## 3. Non-Parametric Tests: Participation vs Q26 Satisfaction
 
-```{r lavaan-path}
+```{r nonparametric}
+library(coin)
+
+groups <- list(
+  None    = df_full$q26[df_full$q22_ord == 0],
+  Info    = df_full$q26[df_full$q22_ord == 1],
+  Consult = df_full$q26[df_full$q22_ord == 2]
+)
+cat("Group sizes:", sapply(groups, length), "\n")
+cat("Group means:", round(sapply(groups, mean, na.rm=TRUE), 3), "\n")
+
+# Kruskal-Wallis
+kw_res <- kruskal.test(q26 ~ part_group, data=df_full)
+n_tot  <- nrow(df_full)
+k      <- length(unique(df_full$part_group[!is.na(df_full$part_group)]))
+eps2   <- (kw_res$statistic - k + 1) / (n_tot - k)
+cat(sprintf("Kruskal-Wallis: H = %.3f, df = %d, p = %.4f, ε² = %.3f\n",
+            kw_res$statistic, kw_res$parameter, kw_res$p.value, eps2))
+
+# Mann-Whitney pairwise (Bonferroni)
+pairs_list <- list(c("None","Info"), c("None","Consult"), c("Info","Consult"))
+mw_rows <- lapply(pairs_list, function(pr) {
+  a <- groups[[pr[1]]]; b <- groups[[pr[2]]]
+  if (length(a) < 2 || length(b) < 2) return(NULL)
+  res <- wilcox.test(a, b, exact=FALSE)
+  r   <- 1 - 2*res$statistic / (length(a)*length(b))
+  data.frame(Pair=paste(pr, collapse=" vs "), U=res$statistic,
+             p_raw=round(res$p.value,4), p_bonf=round(min(res$p.value*3,1),4),
+             r=round(r,3))
+})
+kable(do.call(rbind, mw_rows), caption="Mann-Whitney U (Bonferroni corrected)")
+
+# Spearman and Kendall
+corr_dat <- df_full[complete.cases(df_full[,c("PL","q22_ord","q24_ord","q25","q26")]),]
+sp_PL  <- cor.test(corr_dat$PL,       corr_dat$q26, method="spearman")
+sp_q22 <- cor.test(corr_dat$q22_ord,  corr_dat$q26, method="spearman")
+sp_q25 <- cor.test(corr_dat$q25,      corr_dat$q26, method="spearman")
+kt_PL  <- cor.test(corr_dat$PL,       corr_dat$q26, method="kendall")
+
+corr_table <- data.frame(
+  Test      = c("Spearman ρ (PL vs Q26)","Spearman ρ (Q22 vs Q26)","Spearman ρ (Q25 vs Q26)","Kendall τ (PL vs Q26)"),
+  Statistic = c(round(sp_PL$estimate,3), round(sp_q22$estimate,3), round(sp_q25$estimate,3), round(kt_PL$estimate,3)),
+  p_value   = c(round(sp_PL$p.value,4),  round(sp_q22$p.value,4),  round(sp_q25$p.value,4),  round(kt_PL$p.value,4))
+)
+kable(corr_table, caption="Correlation: Participation vs Q26 Satisfaction")
+```
+
+## 4. Jonckheere-Terpstra Trend Test
+
+```{r jt-test}
+# Manual JT: H1: None ≤ Info ≤ Consult (ordered increasing)
+jt_groups_ord <- list(groups$None, groups$Info, groups$Consult)
+jt_groups_ord <- Filter(function(g) length(g) >= 2, jt_groups_ord)
+
+JT <- 0
+for (i in seq_along(jt_groups_ord)) {
+  for (j in seq_along(jt_groups_ord)) {
+    if (j > i) {
+      ai <- jt_groups_ord[[i]]; aj <- jt_groups_ord[[j]]
+      for (xi in ai) JT <- JT + sum(xi < aj) + 0.5*sum(xi == aj)
+    }
+  }
+}
+ns_jt <- sapply(jt_groups_ord, length); N_jt <- sum(ns_jt)
+mu_J  <- (N_jt^2 - sum(ns_jt^2)) / 4
+var_J <- (N_jt^2*(2*N_jt+3) - sum(ns_jt^2*(2*ns_jt+3))) / 72
+Z_JT  <- (JT - mu_J) / sqrt(var_J)
+p_JT  <- pnorm(Z_JT, lower.tail=FALSE)  # one-sided: increasing trend
+
+cat(sprintf("Jonckheere-Terpstra: JT = %.1f, z = %.3f, p (one-sided, increasing) = %.4f\n",
+            JT, Z_JT, p_JT))
+kable(data.frame(Statistic=c("JT","E(JT)","Z","p (one-sided)"),
+                 Value=round(c(JT,mu_J,Z_JT,p_JT),4)),
+      caption="Jonckheere-Terpstra Trend Test")
+```
+
+## 5. Tobit Regression (Ceiling Effect)
+
+```{r tobit}
+library(survival)
+
+tobit_dat <- df_full[complete.cases(df_full[,c("PL","q26")]),]
+tobit_fit <- survreg(Surv(q26, q26 < 5, type="right") ~ PL,
+                     data=tobit_dat, dist="gaussian")
+cat("Tobit (right-censored at 5):\n")
+print(summary(tobit_fit))
+
+# Compare with OLS
+ols_fit <- lm(q26 ~ PL, data=tobit_dat)
+cat("\nOLS for comparison:\n")
+print(summary(ols_fit))
+
+b_tobit <- coef(tobit_fit)["PL"]
+b_ols   <- coef(ols_fit)["PL"]
+cat(sprintf("\nTobit β(PL) = %.4f | OLS β(PL) = %.4f | Ratio = %.3f\n",
+            b_tobit, b_ols, abs(b_tobit/b_ols)))
+```
+
+## 6. lavaan Path Model: PL → Q26
+
+```{r lavaan}
 library(lavaan)
 
-if (all(c("q24_num","satisfaction") %in% names(df_complete))) {
-  # Single-indicator path model with residual variances fixed to 0
-  model_lav <- "
-    # Measurement model (single indicators, fix residuals to 0)
-    PST =~ satisfaction
-    PL  =~ q24_num
+lav_dat <- df_full[complete.cases(df_full[,c("PL","q22_norm","q24_norm","q25_norm","q26")]),]
 
-    # Fix residual variances to 0 (single indicator assumption)
-    satisfaction ~~ 0*satisfaction
-    q24_num      ~~ 0*q24_num
+# Formative composite PL → outcome Q26
+# Since PL is an observed composite, we model it as a simple regression path
+model_lav <- "
+  # Direct path: PL (observed IAP2 composite) predicts Q26 satisfaction
+  q26 ~ PL + q22_norm + q24_norm + q25_norm
+"
 
-    # Structural path
-    PST ~ PL
-  "
+fit_lav <- sem(model_lav, data=lav_dat, estimator="MLR")
+summary(fit_lav, fit.measures=TRUE, standardized=TRUE)
 
-  fit_lav <- sem(model_lav, data=df_complete, estimator="ML")
-  summary(fit_lav, fit.measures=TRUE, standardized=TRUE)
+params_lav <- parameterestimates(fit_lav, standardized=TRUE)
+path_params <- params_lav[params_lav$op == "~",
+                          c("lhs","op","rhs","est","se","z","pvalue","std.all")]
+kable(path_params, caption="lavaan Path Coefficients (MLR estimator)", digits=3)
 
-  # Extract parameters
-  params <- parameterestimates(fit_lav, standardized=TRUE)
-  structural_params <- params[params$op == "~", ]
-  qtable(structural_params[, c("lhs","op","rhs","est","se","z","pvalue","std.all")],
-         caption="lavaan Path Coefficients (PST ~ PL)")
-
-  fit_indices <- fitMeasures(fit_lav, c("cfi","rmsea","srmr","chisq","df","pvalue"))
-  cat("\nFit indices:\n")
-  print(fit_indices)
-} else {
-  cat("Required variables (q24_num, satisfaction) not found.\n")
-}
+fit_idx <- fitMeasures(fit_lav, c("cfi","rmsea","srmr","chisq","df","pvalue"))
+cat("\nFit indices:\n"); print(round(fit_idx, 3))
 ```
 
-## 5. Ordinal Logistic Regression (polr)
+## 7. OLS Regression with Robust SE
 
-```{r ordinal-polr}
-library(MASS)
+```{r ols-robust}
+library(sandwich)
+library(lmtest)
 
-if (all(c("q24_num","satisfaction") %in% names(df_complete))) {
-  df_polr <- df_complete %>%
-    mutate(sat_ord = ordered(satisfaction))
+ols_full <- lm(q26 ~ PL + q22_norm + q24_norm + q25_norm, data=lav_dat)
+cat("OLS with HC3 robust SE:\n")
+ols_robust_test <- coeftest(ols_full, vcov=vcovHC(ols_full, type="HC3"))
+print(ols_robust_test)
 
-  polr_fit <- polr(sat_ord ~ q24_num, data=df_polr, Hess=TRUE)
-  polr_summary <- summary(polr_fit)
-
-  # Coefficient table with p-values
-  ctable <- coef(polr_summary)
-  p_vals <- pnorm(abs(ctable[, "t value"]), lower.tail=FALSE) * 2
-  polr_table <- cbind(ctable, "p value" = p_vals)
-  qtable(polr_table, caption="Ordinal Logistic Regression (polr): sat_ord ~ q24_num")
-
-  # Odds ratios
-  or_table <- exp(cbind(OR=coef(polr_fit), confint(polr_fit)))
-  qtable(or_table, caption="Odds Ratios and 95% CI")
-} else {
-  cat("Required variables not found.\n")
-}
+cat(sprintf("\nR² = %.3f, Adj R² = %.3f\n",
+            summary(ols_full)$r.squared, summary(ols_full)$adj.r.squared))
 ```
 
-## 6. Ceiling Effect Diagnostics
+## 8. Binary Logistic: Ceiling (Q26=5) vs Non-Ceiling
 
-```{r ceiling-effects}
+```{r ceiling-logistic}
+lav_dat$ceiling <- as.integer(lav_dat$q26 == 5)
+logit_ceil <- glm(ceiling ~ PL, data=lav_dat, family=binomial)
+cat("Logistic regression (Q26=5 vs rest):\n")
+print(summary(logit_ceil))
+cat("\nOdds ratios:\n")
+print(round(exp(cbind(OR=coef(logit_ceil), confint(logit_ceil))), 3))
+```
+
+## 9. Visualisations
+
+```{r plots, fig.width=12, fig.height=8}
 library(ggplot2)
+library(patchwork)
 
-if ("satisfaction" %in% names(df_complete)) {
-  sat_vec <- df_complete$satisfaction
+colours <- c(None="#4878CF", Info="#6ACC65", Consult="#D65F5F")
 
-  prop_max <- mean(sat_vec == max(sat_vec, na.rm=TRUE), na.rm=TRUE)
-  cat("Proportion at maximum (", max(sat_vec, na.rm=TRUE), "):", round(prop_max, 4), "\n")
-  cat("Proportion at 4 or 5:", round(mean(sat_vec >= 4, na.rm=TRUE), 4), "\n")
+p1 <- ggplot(df_full[!is.na(df_full$part_group),],
+             aes(x=part_group, y=q26, fill=part_group)) +
+  geom_boxplot(alpha=0.8) +
+  scale_fill_manual(values=colours) +
+  labs(x="Participation group", y="Q26 Maintenance satisfaction",
+       title="(a) Satisfaction by participation group") +
+  theme_minimal() + theme(legend.position="none")
 
-  # Histogram
-  sat_df_plot <- data.frame(satisfaction=sat_vec)
-  p_ceil <- ggplot(sat_df_plot, aes(x=satisfaction)) +
-    geom_histogram(binwidth=1, fill="steelblue", color="white", alpha=0.8) +
-    geom_vline(xintercept=max(sat_vec, na.rm=TRUE), color="red", linetype="dashed", linewidth=1) +
-    annotate("text", x=max(sat_vec, na.rm=TRUE)-0.2, y=Inf,
-             label=paste0("Ceiling: ", round(prop_max*100,1), "%"),
-             hjust=1, vjust=1.5, color="red", size=4) +
-    labs(title="Satisfaction Distribution with Ceiling Effect",
-         x="Satisfaction Score", y="Count") +
-    theme_minimal()
-  print(p_ceil)
+p2 <- ggplot(df_full[!is.na(df_full$PL) & !is.na(df_full$q26),],
+             aes(x=PL, y=q26)) +
+  geom_point(alpha=0.4, colour="steelblue") +
+  geom_smooth(method="lm", se=TRUE, colour="red", linetype="dashed") +
+  labs(x="Participation Level (PL composite)", y="Q26 Satisfaction",
+       title=sprintf("(b) PL vs Q26 (ρ=%.2f, p=%.3f)", sp_PL$estimate, sp_PL$p.value)) +
+  theme_minimal()
 
-  # Chi-square test: compare observed vs uniform distribution
-  obs_counts <- table(sat_vec)
-  n_cats <- length(obs_counts)
-  expected <- rep(sum(obs_counts)/n_cats, n_cats)
-  chi_res <- chisq.test(obs_counts, p=rep(1/n_cats, n_cats))
-  cat("\nChi-square test (vs uniform):\n")
-  print(chi_res)
-  qtable(data.frame(
-    Statistic = c("Chi-squared", "df", "p-value"),
-    Value = c(round(chi_res$statistic, 4), chi_res$parameter, round(chi_res$p.value, 4))
-  ), caption="Chi-square Test: Satisfaction vs Uniform Distribution")
-} else {
-  cat("satisfaction column not found.\n")
-}
+p3 <- ggplot(df_sat, aes(x=q26)) +
+  geom_histogram(binwidth=1, fill="steelblue", colour="white", alpha=0.8) +
+  geom_vline(xintercept=5, colour="red", linetype="dashed") +
+  annotate("text", x=4.8, y=Inf, label=paste0("Ceiling: ",
+           round(100*mean(df_sat$q26==5,na.rm=TRUE),1),"%"),
+           hjust=1, vjust=1.5, colour="red", size=3.5) +
+  labs(x="Q26 Satisfaction", y="Count", title="(c) Q26 distribution & ceiling") +
+  theme_minimal()
+
+gp <- df_full[!is.na(df_full$part_group),] %>%
+  group_by(part_group) %>%
+  summarise(Mean=mean(q26,na.rm=TRUE), SD=sd(q26,na.rm=TRUE), .groups="drop")
+
+p4 <- ggplot(gp, aes(x=part_group, y=Mean, fill=part_group)) +
+  geom_col(alpha=0.8) +
+  geom_errorbar(aes(ymin=Mean-SD, ymax=Mean+SD), width=0.3) +
+  scale_fill_manual(values=colours) +
+  labs(x="Group", y="Mean Q26 ± SD", title="(d) Mean satisfaction by group") +
+  theme_minimal() + theme(legend.position="none")
+
+(p1 + p2) / (p3 + p4)
 ```
 
-## 7. Jonckheere-Terpstra Test
+## 10. EGT Assessment Summary
 
-```{r jonckheere}
-if (all(c("q24_num","satisfaction") %in% names(df_complete))) {
-  jt_available <- requireNamespace("clinfun", quietly=TRUE)
-
-  if (jt_available) {
-    library(clinfun)
-    jt_groups <- df_complete$q24_num
-    jt_y      <- df_complete$satisfaction
-    jt_result <- jonckheere.test(jt_y, jt_groups, alternative="increasing", nperm=999)
-    cat("Jonckheere-Terpstra test (clinfun):\n")
-    print(jt_result)
-    qtable(data.frame(
-      Statistic = c("JT statistic", "p-value"),
-      Value = c(round(jt_result$statistic, 2), round(jt_result$p.value, 4))
-    ), caption="Jonckheere-Terpstra Test Results")
-  } else {
-    cat("clinfun not available. Using manual implementation.\n")
-
-    # Manual Jonckheere-Terpstra
-    groups_jt <- sort(unique(df_complete$q24_num))
-    group_data_jt <- lapply(groups_jt, function(g) df_complete$satisfaction[df_complete$q24_num == g])
-    names(group_data_jt) <- as.character(groups_jt)
-
-    J_stat <- 0
-    for (i in seq_along(groups_jt)) {
-      for (j in seq_along(groups_jt)) {
-        if (j > i) {
-          u_res <- wilcox.test(group_data_jt[[i]], group_data_jt[[j]],
-                               alternative="less", exact=FALSE)
-          J_stat <- J_stat + u_res$statistic
-        }
-      }
-    }
-
-    ns_jt <- sapply(group_data_jt, length)
-    N_jt  <- sum(ns_jt)
-    E_J   <- (N_jt^2 - sum(ns_jt^2)) / 4
-    Var_J <- (N_jt^2 * (2*N_jt+3) - sum(ns_jt^2 * (2*ns_jt+3))) / 72
-    Z_JT  <- (J_stat - E_J) / sqrt(Var_J)
-    p_JT  <- pnorm(Z_JT, lower.tail=FALSE)
-
-    cat(sprintf("Manual JT: J=%.2f, E(J)=%.2f, Z=%.4f, p=%.4f\n", J_stat, E_J, Z_JT, p_JT))
-    qtable(data.frame(
-      Statistic = c("J", "E(J)", "Var(J)", "Z", "p-value (one-tailed)"),
-      Value = c(round(J_stat,2), round(E_J,2), round(Var_J,2), round(Z_JT,4), round(p_JT,4))
-    ), caption="Manual Jonckheere-Terpstra Test")
-  }
-} else {
-  cat("Required variables not found.\n")
-}
-```
-
-## 8. Mediation Analysis: info_score -> q24 -> satisfaction
-
-```{r mediation}
-if (all(c("info_score","q24_num","satisfaction") %in% names(df_complete))) {
-
-  med_available <- requireNamespace("mediation", quietly=TRUE)
-
-  if (med_available) {
-    library(mediation)
-
-    # Mediator model: q24_num ~ info_score
-    med_model <- lm(q24_num ~ info_score, data=df_complete)
-
-    # Outcome model: satisfaction ~ q24_num + info_score
-    out_model <- lm(satisfaction ~ q24_num + info_score, data=df_complete)
-
-    cat("Mediator model summary:\n")
-    print(summary(med_model))
-    cat("\nOutcome model summary:\n")
-    print(summary(out_model))
-
-    set.seed(42)
-    med_result <- mediate(med_model, out_model,
-                          treat="info_score", mediator="q24_num",
-                          boot=TRUE, sims=500)
-    cat("\nMediation analysis results:\n")
-    print(summary(med_result))
-
-    med_table <- data.frame(
-      Effect = c("ACME (indirect)", "ADE (direct)", "Total", "Prop. mediated"),
-      Estimate = c(med_result$d0, med_result$z0, med_result$tau.coef, med_result$n0),
-      CI_low   = c(med_result$d0.ci[1], med_result$z0.ci[1],
-                   med_result$tau.ci[1], med_result$n0.ci[1]),
-      CI_high  = c(med_result$d0.ci[2], med_result$z0.ci[2],
-                   med_result$tau.ci[2], med_result$n0.ci[2]),
-      p_value  = c(med_result$d0.p, med_result$z0.p,
-                   med_result$tau.p, med_result$n0.p)
-    )
-    qtable(med_table, caption="Mediation Analysis: info_score -> q24 -> satisfaction")
-
-  } else {
-    cat("mediation package not available. Using manual Sobel test.\n")
-
-    # Path a: info_score -> q24_num
-    fit_a <- lm(q24_num ~ info_score, data=df_complete)
-    a <- coef(fit_a)["info_score"]
-    se_a <- summary(fit_a)$coefficients["info_score", "Std. Error"]
-
-    # Path b: q24_num -> satisfaction (controlling info_score)
-    fit_b <- lm(satisfaction ~ q24_num + info_score, data=df_complete)
-    b <- coef(fit_b)["q24_num"]
-    se_b <- summary(fit_b)$coefficients["q24_num", "Std. Error"]
-
-    # Sobel test
-    ab <- a * b
-    se_ab <- sqrt(b^2 * se_a^2 + a^2 * se_b^2)
-    z_sobel <- ab / se_ab
-    p_sobel <- 2 * pnorm(abs(z_sobel), lower.tail=FALSE)
-
-    # Total effect: info_score -> satisfaction
-    fit_c <- lm(satisfaction ~ info_score, data=df_complete)
-    c_total <- coef(fit_c)["info_score"]
-
-    # Direct effect
-    c_direct <- coef(fit_b)["info_score"]
-
-    cat(sprintf("Path a (info->q24): %.4f (SE=%.4f)\n", a, se_a))
-    cat(sprintf("Path b (q24->sat): %.4f (SE=%.4f)\n", b, se_b))
-    cat(sprintf("Indirect (a*b): %.4f (SE=%.4f)\n", ab, se_ab))
-    cat(sprintf("Sobel Z: %.4f, p=%.4f\n", z_sobel, p_sobel))
-    cat(sprintf("Total effect c: %.4f\n", c_total))
-    cat(sprintf("Direct effect c': %.4f\n", c_direct))
-
-    sobel_table <- data.frame(
-      Path      = c("a (info->q24)", "b (q24->sat, ctrl info)", "Indirect (a*b)",
-                    "Direct (c')", "Total (c)"),
-      Estimate  = round(c(a, b, ab, c_direct, c_total), 4),
-      SE        = round(c(se_a, se_b, se_ab, NA, NA), 4),
-      Sobel_Z   = c(NA, NA, round(z_sobel, 4), NA, NA),
-      p_value   = c(NA, NA, round(p_sobel, 4), NA, NA)
-    )
-    qtable(sobel_table, caption="Sobel Mediation Test: info_score -> q24 -> satisfaction")
-  }
-} else {
-  cat("Required variables (info_score, q24_num, satisfaction) not found.\n")
-}
-```
-
-## 9. Path Diagram
-
-```{r path-diagram}
-diagrammer_available <- requireNamespace("DiagrammeR", quietly=TRUE)
-ggraph_available     <- requireNamespace("ggraph", quietly=TRUE) &&
-                        requireNamespace("igraph", quietly=TRUE)
-
-if (diagrammer_available) {
-  library(DiagrammeR)
-
-  # Get path coefficient if available
-  path_label <- tryCatch({
-    fit_inner <- lm(satisfaction ~ q24_num, data=df_complete)
-    b_val <- round(coef(fit_inner)["q24_num"], 3)
-    paste0("beta=", b_val)
-  }, error=function(e) "beta=?")
-
-  diagram <- grViz(paste0('
-    digraph participation_satisfaction {
-      graph [layout=dot, rankdir=LR, fontsize=12]
-      node [shape=rectangle, style=filled, fontsize=11]
-
-      Q22      [label="Q22\\n(Awareness)", fillcolor="#AED6F1"]
-      INFO     [label="Info Score\\n(Information)", fillcolor="#AED6F1"]
-      CONSULT  [label="Consult Score\\n(Consultation)", fillcolor="#AED6F1"]
-      PART     [label="PARTICIPATION\\n(Latent)", fillcolor="#F9E79F", shape=ellipse]
-      Q24      [label="Q24\\n(Part. Level)", fillcolor="#A9DFBF"]
-      SAT      [label="SATISFACTION\\n(Outcome)", fillcolor="#FADBD8", shape=ellipse]
-
-      Q22     -> PART [label="w1"]
-      INFO    -> PART [label="w2"]
-      CONSULT -> PART [label="w3"]
-      PART    -> Q24  [label="reflect"]
-      Q24     -> SAT  [label="', path_label, '"]
-    }
-  '))
-  print(diagram)
-
-} else if (ggraph_available) {
-  library(igraph)
-  library(ggraph)
-  library(ggplot2)
-
-  nodes <- data.frame(
-    name=c("Q22","Info","Consult","PARTICIPATION","Q24","SATISFACTION"),
-    type=c("indicator","indicator","indicator","latent","mediator","outcome")
-  )
-  edges <- data.frame(
-    from=c("Q22","Info","Consult","PARTICIPATION","Q24"),
-    to  =c("PARTICIPATION","PARTICIPATION","PARTICIPATION","Q24","SATISFACTION")
-  )
-
-  g <- graph_from_data_frame(edges, vertices=nodes, directed=TRUE)
-
-  p_graph <- ggraph(g, layout="sugiyama") +
-    geom_edge_link(arrow=arrow(length=unit(3,"mm")), end_cap=circle(3,"mm"),
-                   color="steelblue", width=1) +
-    geom_node_label(aes(label=name, fill=type), size=3.5) +
-    scale_fill_manual(values=c(indicator="#AED6F1", latent="#F9E79F",
-                               mediator="#A9DFBF", outcome="#FADBD8")) +
-    labs(title="Path Diagram: Participation -> Satisfaction") +
-    theme_void()
-  print(p_graph)
-
-} else {
-  cat("Neither DiagrammeR nor ggraph/igraph available.\n")
-  cat("Path diagram: Q22, Info, Consult -> [PARTICIPATION] -> Q24 -> [SATISFACTION]\n")
-
-  # Fallback: basic ggplot2 diagram
-  library(ggplot2)
-  nodes_df <- data.frame(
-    x=c(1,1,1,3,5,7),
-    y=c(4,3,2,3,3,3),
-    label=c("Q22","Info","Consult","PART","Q24","SAT"),
-    shape=c("rect","rect","rect","ellipse","rect","ellipse")
-  )
-  edges_df <- data.frame(
-    x1=c(1.3,1.3,1.3,3.5,5.3),
-    x2=c(2.7,2.7,2.7,4.7,6.7),
-    y1=c(4,3,2,3,3),
-    y2=c(3,3,3,3,3)
-  )
-  p_fallback <- ggplot() +
-    geom_segment(data=edges_df, aes(x=x1,y=y1,xend=x2,yend=y2),
-                 arrow=arrow(length=unit(0.3,"cm")), color="steelblue", linewidth=1) +
-    geom_label(data=nodes_df, aes(x=x, y=y, label=label), size=4,
-               fill=c("#AED6F1","#AED6F1","#AED6F1","#F9E79F","#A9DFBF","#FADBD8")) +
-    xlim(0.5, 7.5) + ylim(1.5, 4.5) +
-    labs(title="Path Diagram: Participation -> Satisfaction") +
-    theme_void()
-  print(p_fallback)
-}
-```
-
-## 10. Hypothesis Summary Table
-
-```{r hypothesis-summary}
-library(knitr)
-
-hyp_table <- data.frame(
-  Hypothesis = c(
-    "H1: Higher participation level (Q24) predicts higher satisfaction",
-    "H2: Information access (info_score) positively associated with satisfaction",
-    "H3: Consultation opportunities (consult_score) positively associated with satisfaction",
-    "H4: Ordered trend in satisfaction across Q24 levels (Jonckheere-Terpstra)",
-    "H5: Q24 mediates info_score -> satisfaction relationship",
-    "H6: Ceiling effect present in satisfaction distribution",
-    "H7: Expectation gap: Q24=0 shows lower satisfaction than Q24=2"
+```{r egt-summary}
+egt_df <- data.frame(
+  Test = c("Kruskal-Wallis", "Jonckheere-Terpstra (z)", "Spearman ρ (PL)",
+           "Kendall τ (PL)", "Cohen's d (Consult-None)", "PLS-SEM β (PL→Q26)"),
+  Statistic = c(
+    round(kw_res$statistic, 3), round(Z_JT, 3), round(sp_PL$estimate, 3),
+    round(kt_PL$estimate, 3),
+    round((mean(groups$Consult,na.rm=TRUE)-mean(groups$None,na.rm=TRUE)) /
+          sqrt((var(groups$Consult,na.rm=TRUE)+var(groups$None,na.rm=TRUE))/2), 3),
+    NA
   ),
-  Test = c(
-    "Ordinal logistic regression (polr), Spearman rho",
-    "Spearman rho, PLS-SEM outer weight",
-    "Spearman rho, PLS-SEM outer weight",
-    "Jonckheere-Terpstra Z-test",
-    "Sobel test / mediation package",
-    "Chi-square vs uniform, proportion at max",
-    "One-tailed Mann-Whitney U, Cohen's d"
+  p_value = c(
+    round(kw_res$p.value, 4), round(p_JT, 4), round(sp_PL$p.value, 4),
+    round(kt_PL$p.value, 4), NA, NA
   ),
-  Expected_Direction = c(
-    "Positive coefficient, p < .05",
-    "Positive rho, p < .05",
-    "Positive rho, p < .05",
-    "Z > 1.96, p < .05",
-    "Significant indirect effect (a*b)",
-    "Significant deviation from uniform",
-    "Cohen's d > 0.2, p < .05"
-  ),
-  stringsAsFactors = FALSE
+  Direction = c("n.s.", "negative (−)", "negative (−)", "negative (−)",
+                "negative (−)", "see Python output"),
+  EGT_supported = c("No (n.s.)", "No (n.s.)", "No (n.s.)", "No (n.s.)", "Direction only", "Inconclusive")
 )
 
-qtable(hyp_table, caption="Hypothesis Summary and Statistical Tests")
-```
+kable(egt_df, caption="EGT Assessment: All tests non-significant (p>0.05)")
 
-## 11. Additional ggplot2 Visualizations
-
-```{r additional-plots, fig.width=10, fig.height=5}
-library(ggplot2)
-
-if (all(c("q24_num","satisfaction") %in% names(df_complete))) {
-
-  # Plot 1: Boxplot satisfaction by q24 group
-  p1 <- ggplot(df_complete, aes(x=factor(q24_num), y=satisfaction, fill=factor(q24_num))) +
-    geom_boxplot(alpha=0.7, outlier.shape=21) +
-    geom_jitter(width=0.15, alpha=0.3, size=1.5, color="gray30") +
-    scale_fill_brewer(palette="Blues", guide="none") +
-    labs(title="Satisfaction by Q24 Group",
-         x="Q24 Level", y="Satisfaction Score") +
-    theme_minimal(base_size=12)
-
-  print(p1)
-
-  # Plot 2: Scatter with smooth
-  p2 <- ggplot(df_complete, aes(x=q24_num, y=satisfaction)) +
-    geom_jitter(width=0.2, height=0.1, alpha=0.4, color="coral", size=2) +
-    geom_smooth(method="lm", color="navy", se=TRUE, linewidth=1.2) +
-    geom_smooth(method="loess", color="darkgreen", se=FALSE, linetype="dashed", linewidth=1) +
-    labs(title="Q24 vs Satisfaction: Linear and LOESS fits",
-         x="Q24 Level", y="Satisfaction Score",
-         caption="Navy: linear fit; Green dashed: LOESS") +
-    theme_minimal(base_size=12)
-
-  print(p2)
-}
-
-if (all(c("info_score","satisfaction") %in% names(df_complete))) {
-  # Plot 3: info_score vs satisfaction
-  p3 <- ggplot(df_complete, aes(x=info_score, y=satisfaction)) +
-    geom_jitter(width=0.1, height=0.1, alpha=0.4, color="steelblue", size=2) +
-    geom_smooth(method="lm", color="red", se=TRUE, linewidth=1.2) +
-    labs(title="Information Score vs Satisfaction",
-         x="Information Score", y="Satisfaction Score") +
-    theme_minimal(base_size=12)
-
-  print(p3)
-}
-```
-
-## Session Info
-
-```{r session-info}
-sessionInfo()
+cat("\n=== EGT VERDICT ===\n")
+cat("Expectation Gap Theory: NOT CONFIRMED\n")
+cat("All tests are statistically non-significant (p > 0.05).\n")
+cat("Direction of effects is slightly negative (consistent with EGT)\n")
+cat("but effect sizes are negligible (|ρ| < 0.13, |d| < 0.27).\n")
+cat("Conclusion: Participation level does not significantly predict\n")
+cat("maintenance satisfaction in this Qinghe Park sample.\n")
 ```
