@@ -3,8 +3,8 @@
 Dep. Variable:                ceiling   No. Observations:                   81
 Model:                          Logit   Df Residuals:                       79
 Method:                           MLE   Df Model:                            1
-Date:                Mon, 15 Jun 2026   Pseudo R-squ.:                 0.01687
-Time:                        12:49:03   Log-Likelihood:                -46.574
+Date:                Mon, 29 Jun 2026   Pseudo R-squ.:                 0.01687
+Time:                        07:50:16   Log-Likelihood:                -46.574
 converged:                       True   LL-Null:                       -47.373
 Covariance Type:            nonrobust   LLR p-value:                    0.2061
 ==============================================================================
