@@ -1,15 +1,15 @@
                            Logit Regression Results                           
 ==============================================================================
-Dep. Variable:                ceiling   No. Observations:                   81
-Model:                          Logit   Df Residuals:                       79
+Dep. Variable:                ceiling   No. Observations:                  105
+Model:                          Logit   Df Residuals:                      103
 Method:                           MLE   Df Model:                            1
-Date:                Mon, 29 Jun 2026   Pseudo R-squ.:                 0.01687
-Time:                        07:50:16   Log-Likelihood:                -46.574
-converged:                       True   LL-Null:                       -47.373
-Covariance Type:            nonrobust   LLR p-value:                    0.2061
+Date:                Mon, 29 Jun 2026   Pseudo R-squ.:                0.009859
+Time:                        07:55:15   Log-Likelihood:                -64.717
+converged:                       True   LL-Null:                       -65.361
+Covariance Type:            nonrobust   LLR p-value:                    0.2563
 ==============================================================================
                  coef    std err          z      P>|z|      [0.025      0.975]
 ------------------------------------------------------------------------------
-const         -0.3142      0.582     -0.540      0.589      -1.454       0.826
-PL            -1.7336      1.401     -1.237      0.216      -4.479       1.012
+const         -1.3187      0.529     -2.491      0.013      -2.356      -0.281
+PL             1.1260      0.996      1.130      0.258      -0.826       3.078
 ==============================================================================

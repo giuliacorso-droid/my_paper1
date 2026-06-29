@@ -1,30 +1,29 @@
                             OLS Regression Results                            
 ==============================================================================
-Dep. Variable:                    q26   R-squared:                       0.045
-Model:                            OLS   Adj. R-squared:                 -0.005
-Method:                 Least Squares   F-statistic:                     2.776
-Date:                Mon, 29 Jun 2026   Prob (F-statistic):             0.0328
-Time:                        07:50:16   Log-Likelihood:                -65.193
-No. Observations:                  81   AIC:                             140.4
-Df Residuals:                      76   BIC:                             152.4
-Df Model:                           4                                         
+Dep. Variable:                    q26   R-squared:                       0.167
+Model:                            OLS   Adj. R-squared:                  0.125
+Method:                 Least Squares   F-statistic:                     5.869
+Date:                Mon, 29 Jun 2026   Prob (F-statistic):           8.61e-05
+Time:                        07:55:15   Log-Likelihood:                -76.833
+No. Observations:                 105   AIC:                             165.7
+Df Residuals:                      99   BIC:                             181.6
+Df Model:                           5                                         
 Covariance Type:                  HC3                                         
 ==============================================================================
                  coef    std err          z      P>|z|      [0.025      0.975]
 ------------------------------------------------------------------------------
-const          4.0262      0.272     14.821      0.000       3.494       4.559
-PL           -15.4812     10.324     -1.500      0.134     -35.715       4.753
-q22_norm       5.2129      3.678      1.417      0.156      -1.997      12.422
-q24_norm       2.8993      1.979      1.465      0.143      -0.979       6.777
-q25_norm       5.1649      3.308      1.561      0.118      -1.319      11.649
+const          3.8212      0.221     17.270      0.000       3.388       4.255
+q22_norm      -0.2950      0.141     -2.086      0.037      -0.572      -0.018
+info_norm      0.2781      0.279      0.998      0.318      -0.268       0.824
+cons_norm      0.9918      0.599      1.656      0.098      -0.182       2.165
+q24_norm      -0.2735      0.133     -2.063      0.039      -0.533      -0.014
+q25_norm       0.9452      0.281      3.369      0.001       0.395       1.495
 ==============================================================================
-Omnibus:                        0.206   Durbin-Watson:                   1.838
-Prob(Omnibus):                  0.902   Jarque-Bera (JB):                0.146
-Skew:                          -0.100   Prob(JB):                        0.930
-Kurtosis:                       2.940   Cond. No.                     1.09e+03
+Omnibus:                        1.694   Durbin-Watson:                   1.687
+Prob(Omnibus):                  0.429   Jarque-Bera (JB):                1.305
+Skew:                          -0.266   Prob(JB):                        0.521
+Kurtosis:                       3.123   Cond. No.                         18.9
 ==============================================================================
 
 Notes:
 [1] Standard Errors are heteroscedasticity robust (HC3)
-[2] The condition number is large, 1.09e+03. This might indicate that there are
-strong multicollinearity or other numerical problems.
