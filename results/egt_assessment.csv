@@ -1,6 +1,6 @@
-Test,Statistic,p,EGT
-Spearman ρ (PL vs Q26),ρ = 0.115,0.2422,NO (positive)
-Jonckheere-Terpstra,z = 0.353,0.3620,NO (increasing)
-PLS-SEM β (PL→Q26),β = 0.232,"CI [0.037, 0.397]",NO (positive β)
-Group means,"{'None': np.float64(4.28), 'Info': np.float64(4.18), 'Consult': np.float64(4.37)}",KW p=0.7018,Ambiguous
-Cohen's d (Consult−None),d = 0.162,,NO (positive d)
+Test,Stat,p,EGT_support
+"Spearman rho (PL,MGT)",0.030,0.7201,NO
+JT trend,z=-0.044,0.5176,YES
+PLS beta(PL->MGT),0.099,"CI[-0.082,0.255]",NO
+Group means,"{'None': 4.27, 'Info': 4.1, 'Consult': 4.3}",KW p=0.690,Ambiguous
+Cohen's d (Consult-None),d=0.041,,NO

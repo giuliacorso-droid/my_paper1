@@ -1,0 +1,12 @@
+feature,mean_abs_shap
+Distance,0.121000744
+Age group,0.10919308
+Q25 terminology,0.10162275
+Visit freq,0.09561445
+Education,0.09049531
+PL composite,0.08312534
+Gender,0.07331118
+Q24 signage,0.063309275
+Q22 level,0.02081572
+Info score,0.019130876
+Consult score,0.0074710366
